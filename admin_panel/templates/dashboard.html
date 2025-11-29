@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Панель управления</h2>
+<div class="row">
+  <div class="col-md-3"><div class="card p-3">Пользователи: <strong>{{ stats.total_users }}</strong></div></div>
+  <div class="col-md-3"><div class="card p-3">Маршрут1: <strong>{{ stats.route1_entries }}</strong></div></div>
+  <div class="col-md-3"><div class="card p-3">Маршрут2: <strong>{{ stats.route2_entries }}</strong></div></div>
+  <div class="col-md-3"><div class="card p-3">Пары: <strong>{{ stats.assignments }}</strong></div></div>
+</div>
+
+<div class="mt-4">
+  <a href="/admin/users" class="btn btn-outline-primary">Управление пользователями</a>
+  <a href="/admin/route1" class="btn btn-outline-primary">Управление маршрутом 1</a>
+  <a href="/admin/route2" class="btn btn-outline-primary">Управление маршрутом 2</a>
+  <a href="/admin/assignments" class="btn btn-outline-primary">Управление парами</a>
+</div>
+{% endblock %}

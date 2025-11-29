@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Assignments</h3>
+<table class="table table-sm">
+<thead><tr><th>ID</th><th>Giver</th><th>Receiver</th><th>Route</th><th>Status</th><th>Действия</th></tr></thead>
+<tbody>
+{% for a in assignments %}
+<tr>
+  <td>{{ a.id }}</td>
+  <td>{{ a.giver_user_id }}</td>
+  <td>{{ a.receiver_user_id }}</td>
+  <td>{{ a.route_type }}</td>
+  <td>{{ a.sent_status }}</td>
+  <td>
+    <form method="post" action="/admin/assignments/{{ a.id }}/mark" style="display: inline;">
+      {% if a.sent_status == 'sent' %}
+        <input type="hidden" name="sent_status" value="pending">
+        <button class="btn btn-sm btn-danger" type="submit">Mark Unsent</button>
+      {% else %}
+        <input type="hidden" name="sent_status" value="sent">
+        <button class="btn btn-sm btn-success" type="submit">Mark Sent</button>
+      {% endif %}
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}
