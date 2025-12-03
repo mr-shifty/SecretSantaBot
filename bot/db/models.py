@@ -31,9 +31,27 @@ class Route1Entry(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     email = Column(String, nullable=False)
-    full_address = Column(Text, nullable=False)
+    # Common fields
+    full_address = Column(Text, nullable=True)
     delivery_method = Column(String, nullable=True)
-    wishlist = Column(Text, nullable=True)
+    wishlist = Column(Text, nullable=False)
+    # Pickup type: 'postal' or 'pickup'
+    pickup_type = Column(String, nullable=False, default='postal')
+
+    # Postal-specific fields
+    postal_city = Column(String, nullable=True)
+    postal_street = Column(String, nullable=True)
+    postal_building = Column(String, nullable=True)
+    postal_corpus = Column(String, nullable=True)
+    postal_apartment = Column(String, nullable=True)
+    postal_recipient_fullname = Column(String, nullable=True)
+    postal_recipient_phone = Column(String, nullable=True)
+
+    # Pickup point specific fields
+    pickup_company = Column(String, nullable=True)
+    pickup_address = Column(String, nullable=True)
+    pickup_recipient_fullname = Column(String, nullable=True)
+    pickup_recipient_phone = Column(String, nullable=True)
     status = Column(String, default="pending")  # pending/completed/cancelled
     started_at = Column(DateTime, default=datetime.datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
@@ -48,6 +66,10 @@ class Route2Entry(Base):
     status = Column(String, default="pending")
     started_at = Column(DateTime, default=datetime.datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
+    # Local path to uploaded image (required)
+    image_path = Column(String, nullable=True)
+    # Date when to notify (default: Dec 21 current year)
+    notify_date = Column(DateTime, nullable=True)
 
 
 class Assignment(Base):

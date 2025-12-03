@@ -11,9 +11,11 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:///./data.db
       - ADMIN_IDS=${ADMIN_IDS}
       - REMINDER_HOURS=${REMINDER_HOURS:-24}
+      - PYTHONPATH=/app
     volumes:
       - ./data.db:/app/data.db
-    command: python -m bot.main
+      - ./media:/app/media
+    entrypoint: /bin/bash -c "alembic upgrade head && python -m bot.main"
     restart: unless-stopped
     networks:
       - secret_santa_network
@@ -25,16 +27,16 @@ services:
     container_name: secret_santa_admin
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data.db
+      - PYTHONPATH=/app
     volumes:
       - ./data.db:/app/data.db
-    command: uvicorn admin_panel.main:app --host 0.0.0.0 --port 8000
+      - ./media:/app/media
+    entrypoint: /bin/bash -c "alembic upgrade head && uvicorn admin_panel.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     restart: unless-stopped
     networks:
       - secret_santa_network
-    depends_on:
-      - bot
 
 networks:
   secret_santa_network:

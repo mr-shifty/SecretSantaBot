@@ -19,6 +19,10 @@ app = FastAPI(title="Secret Santa Admin Panel", version="1.0.0")
 # Templates and static
 templates = Jinja2Templates(directory="admin_panel/templates")
 app.mount("/static", StaticFiles(directory="admin_panel/static"), name="static")
+# serve uploaded media (images) from local media/ folder
+import os as _os
+_os.makedirs("media/route2", exist_ok=True)
+app.mount("/media", StaticFiles(directory="media"), name="media")
 
 # Simple admin UI auth (password from env)
 import os
@@ -43,10 +47,22 @@ class Route1EntryResponse(BaseModel):
 	id: int
 	user_id: int
 	email: str
-	full_address: str
+	full_address: str | None
 	delivery_method: str | None
 	wishlist: str | None
 	status: str
+	pickup_type: str | None
+	postal_city: str | None
+	postal_street: str | None
+	postal_building: str | None
+	postal_corpus: str | None
+	postal_apartment: str | None
+	postal_recipient_fullname: str | None
+	postal_recipient_phone: str | None
+	pickup_company: str | None
+	pickup_address: str | None
+	pickup_recipient_fullname: str | None
+	pickup_recipient_phone: str | None
 	started_at: datetime
 	completed_at: datetime | None
 
@@ -58,6 +74,8 @@ class Route2EntryResponse(BaseModel):
 	id: int
 	user_id: int
 	email: str
+	image_path: str | None
+	notify_date: datetime | None
 	status: str
 	started_at: datetime
 	completed_at: datetime | None
@@ -296,7 +314,26 @@ async def ui_edit_route1(request: Request, entry_id: int):
 
 
 @app.post("/admin/route1/{entry_id}/edit")
-async def ui_edit_route1_post(request: Request, entry_id: int, email: str = Form(...), full_address: str = Form(...), wishlist: str = Form(...), phone: str | None = Form(None)):
+async def ui_edit_route1_post(
+    request: Request,
+    entry_id: int,
+    email: str = Form(...),
+    wishlist: str = Form(...),
+    phone: str | None = Form(None),
+    # Postal fields
+    postal_city: str | None = Form(None),
+    postal_street: str | None = Form(None),
+    postal_building: str | None = Form(None),
+    postal_corpus: str | None = Form(None),
+    postal_apartment: str | None = Form(None),
+    postal_recipient_fullname: str | None = Form(None),
+    postal_recipient_phone: str | None = Form(None),
+    # Pickup fields
+    pickup_company: str | None = Form(None),
+    pickup_address: str | None = Form(None),
+    pickup_recipient_fullname: str | None = Form(None),
+    pickup_recipient_phone: str | None = Form(None),
+):
     if not is_admin_ui(request):
         return RedirectResponse(url="/admin")
     async_session = get_session()
@@ -306,14 +343,32 @@ async def ui_edit_route1_post(request: Request, entry_id: int, email: str = Form
         if not entry:
             return RedirectResponse(url="/admin/route1")
         entry.email = email
-        entry.full_address = full_address
         entry.wishlist = wishlist
-        # update user phone if provided
+        
+        # Update postal fields if pickup_type is postal
+        if entry.pickup_type == 'postal':
+            entry.postal_city = postal_city
+            entry.postal_street = postal_street
+            entry.postal_building = postal_building
+            entry.postal_corpus = postal_corpus or None
+            entry.postal_apartment = postal_apartment or None
+            entry.postal_recipient_fullname = postal_recipient_fullname
+            entry.postal_recipient_phone = postal_recipient_phone
+        
+        # Update pickup fields if pickup_type is pickup
+        elif entry.pickup_type == 'pickup':
+            entry.pickup_company = pickup_company
+            entry.pickup_address = pickup_address
+            entry.pickup_recipient_fullname = pickup_recipient_fullname
+            entry.pickup_recipient_phone = pickup_recipient_phone
+        
+        # Update user phone if provided
         result = await session.execute(select(User).where(User.id == entry.user_id))
         user = result.scalar_one_or_none()
         if user and phone is not None:
             user.phone = phone or None
         await session.commit()
+        logger.info(f"Admin updated route1 entry {entry_id}")
     return RedirectResponse(url="/admin/route1", status_code=302)
 @app.post("/admin/route1/{entry_id}/delete")
 async def ui_delete_route1(request: Request, entry_id: int):

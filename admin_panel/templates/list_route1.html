@@ -1,16 +1,24 @@
 {% extends 'base.html' %}
 {% block content %}
-<h3>Маршрут 1 — записи</h3>
+<h3>Маршрут 1 — Тайный Санта (записи)</h3>
 <table class="table table-sm">
-<thead><tr><th>ID</th><th>User</th><th>Email</th><th>Адрес</th><th>Пожелания</th><th>Статус</th><th>Действия</th></tr></thead>
+<thead><tr><th>ID</th><th>User</th><th>Email</th><th>Тип доставки</th><th>Пожелания</th><th>Статус</th><th>Действия</th></tr></thead>
 <tbody>
 {% for e in entries %}
 <tr>
   <td>{{ e.id }}</td>
   <td>{{ e.user_id }}</td>
   <td>{{ e.email }}</td>
-  <td>{{ e.full_address }}</td>
-  <td>{{ e.wishlist or '-' }}</td>
+  <td>
+    {% if e.pickup_type == 'postal' %}
+      📮 Почта
+    {% elif e.pickup_type == 'pickup' %}
+      🏢 ПВЗ
+    {% else %}
+      {{ e.pickup_type or '-' }}
+    {% endif %}
+  </td>
+  <td>{{ e.wishlist | truncate(50) if e.wishlist else '-' }}</td>
   <td>{{ e.status }}</td>
   <td>
     <a href="/admin/route1/{{ e.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
