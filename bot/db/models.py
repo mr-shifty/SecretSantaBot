@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Text,
+    JSON,
 )
 from sqlalchemy.ext.declarative import declarative_base
 import datetime
@@ -55,6 +56,8 @@ class Route1Entry(Base):
     status = Column(String, default="pending")  # pending/completed/cancelled
     started_at = Column(DateTime, default=datetime.datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
+    # Structured survey collected via in-chat questionnaire (JSON)
+    survey = Column(JSON, nullable=True)
 
 
 class Route2Entry(Base):

@@ -6,6 +6,16 @@ class Route1States(StatesGroup):
     phone = State()
     pickup_method = State()  # 'postal' or 'pickup'
     wishlist = State()
+    # Survey states (if user doesn't know what to write)
+    survey_q1 = State()
+    survey_q2 = State()
+    survey_q3 = State()
+    survey_q4 = State()
+    survey_q5 = State()
+    survey_q6 = State()
+    survey_q7 = State()
+    survey_q8 = State()
+    survey_review = State()
     
     # Postal delivery path
     postal_city = State()

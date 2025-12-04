@@ -7,10 +7,11 @@ from aiogram.types import Message, Document, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from bot.config import ADMIN_IDS
 from bot.randomizer import perform_draw
-from bot.db.models import User, Route1Entry, Route2Entry, Assignment
+from bot.db.models import User, Route1Entry, Route2Entry, Assignment, NotificationLog
 from bot.db.database import get_session
 from bot.logger import get_logger
 from sqlalchemy import select
+import json
 
 logger = get_logger("admin")
 router = Router()
@@ -80,12 +81,105 @@ async def cb_admin_notify(callback: CallbackQuery):
 		return
 
 	sent_count = 0
+	skipped_count = 0
+	failed_count = 0
 	for assignment in assignments:
-		# In production: send via bot or email
-		sent_count += 1
+		# Build and record notification for each giver about their receiver
+		async_session = get_session()
+		async with async_session as session:
+			# Re-load assignment, giver and receiver within same session so we can update statuses
+			result = await session.execute(select(Assignment).where(Assignment.id == assignment.id))
+			db_assignment = result.scalar_one_or_none()
 
-	logger.info(f"Sent {sent_count} notifications for route{route}")
-	await callback.message.answer(f"✅ Отправлено уведомлений: {sent_count}")
+			result = await session.execute(select(User).where(User.id == db_assignment.giver_user_id))
+			giver = result.scalar_one_or_none()
+			result = await session.execute(select(User).where(User.id == db_assignment.receiver_user_id))
+			receiver = result.scalar_one_or_none()
+			# Get receiver's latest route1 entry
+			result = await session.execute(
+				select(Route1Entry).where(Route1Entry.user_id == db_assignment.receiver_user_id).where(Route1Entry.status == 'completed')
+			)
+			rentry = result.scalar_one_or_none()
+
+			if not giver:
+				logger.warning(f"No giver user found for assignment {assignment.id}")
+				continue
+
+			recv_name = receiver.telegram_username or f"{receiver.first_name or ''} {receiver.last_name or ''}" if receiver else 'Получатель'
+			# Prefer structured survey if present
+			if rentry and rentry.survey:
+				survey_obj = None
+				if isinstance(rentry.survey, (dict, list)):
+					survey_obj = rentry.survey
+				else:
+					try:
+						survey_obj = json.loads(rentry.survey)
+					except Exception:
+						survey_obj = None
+
+				if survey_obj is not None:
+					try:
+						wishlist = "Анкета:\n" + "\n".join([f"{k}: {v}" for k, v in survey_obj.items()])
+					except Exception:
+						wishlist = str(survey_obj)
+				else:
+					wishlist = rentry.survey
+			else:
+				wishlist = (rentry.wishlist if rentry and rentry.wishlist else 'Пожелания отсутствуют')
+
+			delivery = rentry.full_address if (rentry and rentry.full_address) else ''
+			if not delivery and rentry and rentry.pickup_company:
+				delivery = f"Пункт выдачи: {rentry.pickup_company}, {rentry.pickup_address or ''}"
+			recipient_phone = ''
+			if rentry:
+				recipient_phone = rentry.postal_recipient_phone or rentry.pickup_recipient_phone or ''
+
+			text = (
+				f"🎁 Розыгрыш завершён — у вас есть получатель!\n\n"
+				f"Вы — Тайный Санта для: {recv_name}\n\n"
+				f"Пожелания:\n{wishlist}\n\n"
+				f"Адрес / пункт выдачи:\n{delivery}\n"
+				f"Телефон получателя: {recipient_phone}\n\n"
+				f"Рекомендуемая сумма для подарка не более 1000 р.\n"
+			)
+
+			# Create NotificationLog (pending)
+			nlog = NotificationLog(
+				user_id=giver.id if giver else None,
+				channel='telegram',
+				notif_type='assignment',
+				payload=text,
+				status='pending'
+			)
+			session.add(nlog)
+			await session.commit()
+
+			# Safe-send: only send messages to ADMIN_IDS by default
+			if giver.telegram_id not in ADMIN_IDS:
+				logger.info(f"Skipping send to {giver.telegram_id} (not in ADMIN_IDS) — logged only")
+				skipped_count += 1
+				# keep assignment status pending; keep nlog as pending
+				continue
+
+			try:
+				await callback.bot.send_message(chat_id=giver.telegram_id, text=text)
+				# update log and assignment
+				nlog.status = 'sent'
+				nlog.sent_at = datetime.utcnow()
+				db_assignment.sent_status = 'sent'
+				sent_count += 1
+			except Exception as exc:
+				logger.exception(f"Failed to send notification for assignment {assignment.id}: {exc}")
+				nlog.status = 'failed'
+				db_assignment.sent_status = 'failed'
+				failed_count += 1
+
+			session.add(nlog)
+			session.add(db_assignment)
+			await session.commit()
+
+	logger.info(f"Sent {sent_count} notifications for route{route} (skipped: {skipped_count}, failed: {failed_count})")
+	await callback.message.answer(f"✅ Отправлено уведомлений: {sent_count}\n✳️ Пропущено (режим теста): {skipped_count}\n❗ Ошибок: {failed_count}")
 
 
 @router.callback_query(lambda c: c.data in ("admin_export_r1", "admin_export_r2"))
@@ -112,7 +206,7 @@ async def cb_admin_export(callback: CallbackQuery):
 
 		output = io.StringIO()
 		writer = csv.writer(output)
-		writer.writerow(['ID', 'Telegram ID', 'Email', 'Адрес', 'Способ доставки', 'Пожелания', 'Статус'])
+		writer.writerow(['ID', 'Telegram ID', 'Email', 'Адрес', 'Способ доставки', 'Пожелания/Анкета', 'Статус'])
 
 		for entry in entries:
 			async_session = get_session()
@@ -126,7 +220,7 @@ async def cb_admin_export(callback: CallbackQuery):
 				entry.email,
 				entry.full_address,
 				entry.delivery_method or '',
-				entry.wishlist or '',
+				entry.survey or entry.wishlist or '',
 				entry.status
 			])
 
@@ -237,12 +331,97 @@ async def cmd_notify_route1(message: Message):
 		return
 	
 	sent_count = 0
+	skipped_count = 0
+	failed_count = 0
 	for assignment in assignments:
-		# In production: send via bot or email
-		sent_count += 1
-	
-	logger.info(f"Sent {sent_count} notifications for route1")
-	await message.answer(f"✅ Отправлено уведомлений: {sent_count}")
+		async_session = get_session()
+		async with async_session as session:
+			result = await session.execute(select(Assignment).where(Assignment.id == assignment.id))
+			db_assignment = result.scalar_one_or_none()
+
+			result = await session.execute(select(User).where(User.id == db_assignment.giver_user_id))
+			giver = result.scalar_one_or_none()
+			result = await session.execute(select(User).where(User.id == db_assignment.receiver_user_id))
+			receiver = result.scalar_one_or_none()
+			result = await session.execute(
+				select(Route1Entry).where(Route1Entry.user_id == db_assignment.receiver_user_id).where(Route1Entry.status == 'completed')
+			)
+			rentry = result.scalar_one_or_none()
+
+			if not giver:
+				logger.warning(f"No giver user found for assignment {assignment.id}")
+				continue
+
+			recv_name = receiver.telegram_username or f"{receiver.first_name or ''} {receiver.last_name or ''}" if receiver else 'Получатель'
+			if rentry and rentry.survey:
+				survey_obj = None
+				if isinstance(rentry.survey, (dict, list)):
+					survey_obj = rentry.survey
+				else:
+					try:
+						survey_obj = json.loads(rentry.survey)
+					except Exception:
+						survey_obj = None
+
+				if survey_obj is not None:
+					try:
+						wishlist = "Анкета:\n" + "\n".join([f"{k}: {v}" for k, v in survey_obj.items()])
+					except Exception:
+						wishlist = str(survey_obj)
+				else:
+					wishlist = rentry.survey
+			else:
+				wishlist = (rentry.wishlist if rentry and rentry.wishlist else 'Пожелания отсутствуют')
+			delivery = rentry.full_address if (rentry and rentry.full_address) else ''
+			if not delivery and rentry and rentry.pickup_company:
+				delivery = f"Пункт выдачи: {rentry.pickup_company}, {rentry.pickup_address or ''}"
+			recipient_phone = ''
+			if rentry:
+				recipient_phone = rentry.postal_recipient_phone or rentry.pickup_recipient_phone or ''
+
+			text = (
+				f"🎁 Розыгрыш завершён — у вас есть получатель!\n\n"
+				f"Вы — Тайный Санта для: {recv_name}\n\n"
+				f"Пожелания:\n{wishlist}\n\n"
+				f"Адрес / пункт выдачи:\n{delivery}\n"
+				f"Телефон получателя: {recipient_phone}\n\n"
+				f"Рекомендуемая сумма для подарка не более 1000 р.\n"
+			)
+
+			# Create NotificationLog (pending)
+			nlog = NotificationLog(
+				user_id=giver.id if giver else None,
+				channel='telegram',
+				notif_type='assignment',
+				payload=text,
+				status='pending'
+			)
+			session.add(nlog)
+			await session.commit()
+
+			if giver.telegram_id not in ADMIN_IDS:
+				logger.info(f"Skipping send to {giver.telegram_id} (not in ADMIN_IDS) — logged only")
+				skipped_count += 1
+				continue
+
+			try:
+				await message.bot.send_message(chat_id=giver.telegram_id, text=text)
+				nlog.status = 'sent'
+				nlog.sent_at = datetime.utcnow()
+				db_assignment.sent_status = 'sent'
+				sent_count += 1
+			except Exception as exc:
+				logger.exception(f"Failed to send notification for assignment {assignment.id}: {exc}")
+				nlog.status = 'failed'
+				db_assignment.sent_status = 'failed'
+				failed_count += 1
+
+			session.add(nlog)
+			session.add(db_assignment)
+			await session.commit()
+
+	logger.info(f"Sent {sent_count} notifications for route1 (skipped: {skipped_count}, failed: {failed_count})")
+	await message.answer(f"✅ Отправлено уведомлений: {sent_count}\n✳️ Пропущено (режим теста): {skipped_count}\n❗ Ошибок: {failed_count}")
 
 
 @router.message(Command("notify_route2"))
@@ -293,7 +472,7 @@ async def cmd_export_route1(message: Message):
 	# Create CSV in memory
 	output = io.StringIO()
 	writer = csv.writer(output)
-	writer.writerow(['ID', 'Telegram ID', 'Email', 'Адрес', 'Способ доставки', 'Пожелания', 'Статус'])
+	writer.writerow(['ID', 'Telegram ID', 'Email', 'Адрес', 'Способ доставки', 'Пожелания/Анкета', 'Статус'])
 	
 	for entry in entries:
 		async_session = get_session()
@@ -307,7 +486,7 @@ async def cmd_export_route1(message: Message):
 			entry.email,
 			entry.full_address,
 			entry.delivery_method or '',
-			entry.wishlist or '',
+			entry.survey or entry.wishlist or '',
 			entry.status
 		])
 	

@@ -25,8 +25,8 @@ def admin_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Розыгрыш: Маршрут 2", callback_data="admin_draw_r2")],
         [InlineKeyboardButton(text="Уведомить: Маршрут 1", callback_data="admin_notify_r1")],
         [InlineKeyboardButton(text="Уведомить: Маршрут 2", callback_data="admin_notify_r2")],
-        [InlineKeyboardButton(text="Экспорт: Маршрут 1", callback_data="admin_export_r1")],
-        [InlineKeyboardButton(text="Экспорт: Маршрут 2", callback_data="admin_export_r2")],
+        # [InlineKeyboardButton(text="Экспорт: Маршрут 1", callback_data="admin_export_r1")],
+        # [InlineKeyboardButton(text="Экспорт: Маршрут 2", callback_data="admin_export_r2")],
         [InlineKeyboardButton(text="Закрыть", callback_data="admin_close")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -44,6 +44,9 @@ def reply_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="Маршрут 1")],
         [KeyboardButton(text="Маршрут 2")],
     ]
+
+    # Quick access to the survey for users who don't know what to write
+    rows.append([KeyboardButton(text="Анкета")])
 
     if is_admin:
         rows.append([KeyboardButton(text="Админ")])

@@ -607,7 +607,7 @@ async def export_route1():
 	logger.debug(f"Exporting {len(entries)} route1 entries")
 	output = io.StringIO()
 	writer = csv.writer(output)
-	writer.writerow(['ID', 'Telegram ID', 'Email', 'Адрес', 'Способ доставки', 'Пожелания', 'Статус'])
+	writer.writerow(['ID', 'Telegram ID', 'Email', 'Адрес', 'Способ доставки', 'Пожелания/Анкета', 'Статус'])
 
 	for entry in entries:
 		async with async_session as session:
@@ -620,7 +620,7 @@ async def export_route1():
 			entry.email,
 			entry.full_address,
 			entry.delivery_method or '',
-			entry.wishlist or '',
+			entry.survey or entry.wishlist or '',
 			entry.status
 		])
 
