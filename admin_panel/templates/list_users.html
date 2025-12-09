@@ -7,7 +7,8 @@
 {% for u in users %}
 <tr>
   <td>{{ u.id }}</td>
-  <td>{{ u.telegram_id }}</td>
+  <!-- <td>{{ u.telegram_id }}</td> -->
+  <td>{{ u.telegram_username }}</td>
   <td>{{ u.first_name }} {{ u.last_name }} (@{{ u.telegram_username }})</td>
   <td>{{ u.phone or '' }}</td>
   <td>

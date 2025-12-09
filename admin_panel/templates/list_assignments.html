@@ -7,8 +7,8 @@
 {% for a in assignments %}
 <tr>
   <td>{{ a.id }}</td>
-  <td>{{ a.giver_user_id }}</td>
-  <td>{{ a.receiver_user_id }}</td>
+  <td>{% if users and users.get(a.giver_user_id) %}{{ users.get(a.giver_user_id).telegram_username or users.get(a.giver_user_id).telegram_id }}{% else %}{{ a.giver_user_id }}{% endif %}</td>
+  <td>{% if users and users.get(a.receiver_user_id) %}{{ users.get(a.receiver_user_id).telegram_username or users.get(a.receiver_user_id).telegram_id }}{% else %}{{ a.receiver_user_id }}{% endif %}</td>
   <td>{{ a.route_type }}</td>
   <td>{{ a.sent_status }}</td>
   <td>

@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<h3>Редактировать запись Маршрут 2 #{{ entry.id }}</h3>
+<h3>Редактировать запись 'Диджитал Санта (с поздравлениями)' #{{ entry.id }}</h3>
 
 <form method="post" action="/admin/route2/{{ entry.id }}/edit">
   <div class="mb-3">
@@ -33,6 +33,6 @@
 <hr>
 
 <form method="post" action="/admin/route2/{{ entry.id }}/delete">
-  <button class="btn btn-danger" type="submit" onclick="return confirm('Удалить запись маршрута 2? Это действие необратимо.')">Удалить запись</button>
+  <button class="btn btn-danger" type="submit" onclick="return confirm('Удалить запись маршрута &quot;С поздравлениями&quot;? Это действие необратимо.')">Удалить запись</button>
 </form>
 {% endblock %}

@@ -98,6 +98,16 @@ async def perform_draw(route_type: int, bot=None):
 			)
 			session.add(assignment)
 		await session.commit()
+
+		# Ensure all newly created assignments for this route are explicitly marked as pending
+		# (guards against DB defaults or previous inconsistent states)
+		await session.execute(
+			select(Assignment).where(Assignment.route_type == route_type)
+		)
+		for a in (await session.execute(select(Assignment).where(Assignment.route_type == route_type))).scalars().all():
+			if a.sent_status != 'pending':
+				a.sent_status = 'pending'
+		await session.commit()
 	
 	logger.info(f"Successfully created {len(assignments)} assignments for route {route_type}")
 	return True, f"Распределение для маршрута {route_type} успешно создано", len(assignments)

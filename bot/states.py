@@ -10,6 +10,9 @@ class Route1States(StatesGroup):
     survey_q1 = State()
     survey_q2 = State()
     survey_q3 = State()
+    survey_q1_other = State()
+    survey_q2_other = State()
+    survey_q3_other = State()
     survey_q4 = State()
     survey_q5 = State()
     survey_q6 = State()
@@ -29,6 +32,7 @@ class Route1States(StatesGroup):
     
     # Pickup point path
     pickup_company = State()
+    pickup_company_choice = State()
     pickup_address = State()
     pickup_fullname = State()
     pickup_phone = State()

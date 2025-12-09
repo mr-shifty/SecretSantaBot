@@ -6,6 +6,9 @@ from bot.states import Route1States
 from bot.utils import get_or_create_user, is_valid_email, save_route1_entry, check_active_route1_entry
 from bot.logger import get_logger
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from bot.keyboards import reply_menu
+from bot.config import ADMIN_IDS
+from aiogram.types import CallbackQuery
 
 logger = get_logger("route1")
 router = Router()
@@ -16,12 +19,12 @@ async def cmd_route1(message: Message, state: FSMContext):
 	has_active = await check_active_route1_entry(message.from_user.id)
 	if has_active:
 		logger.info(f"User {message.from_user.id} attempted duplicate route1 registration")
-		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 1. Одна заявка на маршрут.")
+		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Тайный Санта (с подарками)'. Одна заявка на маршрут.")
 		return
 	
 	logger.info(f"User {message.from_user.id} started route1 registration")
 	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
-	await message.answer("🎁 Добро пожаловать в Тайного Санту (Маршрут 1)!\n\nПожалуйста, введите ваш email:")
+	await message.answer("🎁 Добро пожаловать в «Тайный Санта (с подарками)»!\n\nПожалуйста, введите ваш email:")
 	await state.set_state(Route1States.email)
 
 
@@ -31,7 +34,7 @@ async def start_anketa(message: Message, state: FSMContext):
 	# Prevent starting if already in an active route1
 	has_active = await check_active_route1_entry(message.from_user.id)
 	if has_active:
-		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 1. Если хотите обновить анкету, сначала отмените старую заявку.")
+		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Тайный Санта (с подарками)'. Если хотите обновить анкету, сначала отмените старую заявку.")
 		return
 
 	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
@@ -66,7 +69,12 @@ async def process_phone(message: Message, state: FSMContext):
 	data = await state.get_data()
 	if data.get('survey_only'):
 		await message.answer("Вы выбрали заполнение анкеты. Отвечайте кратко на вопросы.")
-		await message.answer("1) Какой ваш любимый цвет?\n(например: Красный / Синий / Зеленый / Другой)")
+		# Send buttons for q1
+		kb = InlineKeyboardMarkup(inline_keyboard=[
+			[InlineKeyboardButton(text="Красный", callback_data="s1:Красный"), InlineKeyboardButton(text="Синий", callback_data="s1:Синий")],
+			[InlineKeyboardButton(text="Зеленый", callback_data="s1:Зеленый"), InlineKeyboardButton(text="Другое", callback_data="s1:other")],
+		])
+		await message.answer("1) Какой ваш любимый цвет? Выберите вариант или напишите свой:", reply_markup=kb)
 		await state.set_state(Route1States.survey_q1)
 		return
 	
@@ -92,9 +100,15 @@ async def process_pickup_method(message: Message, state: FSMContext):
 	elif choice == "2":
 		pickup_type = "pickup"
 		logger.debug(f"User {message.from_user.id} chose pickup point")
-		await message.answer("🏢 Вы выбрали пункт выдачи.\n\nУкажите компанию доставки (СДЭК, Яндекс.Карго и т.д.):")
+		# Offer quick choices for common delivery companies or allow manual entry
+		kb = InlineKeyboardMarkup(inline_keyboard=[
+			[InlineKeyboardButton(text="СДЭК", callback_data="pc:СДЭК"), InlineKeyboardButton(text="Яндекс.Карго", callback_data="pc:Яндекс.Карго")],
+			[InlineKeyboardButton(text="Boxberry", callback_data="pc:Boxberry"), InlineKeyboardButton(text="DPD", callback_data="pc:DPD")],
+			[InlineKeyboardButton(text="Другое", callback_data="pc:other")],
+		])
+		await message.answer("🏢 Вы выбрали пункт выдачи. Выберите компанию доставки или укажите вручную:", reply_markup=kb)
 		await state.update_data(pickup_type=pickup_type)
-		await state.set_state(Route1States.pickup_company)
+		await state.set_state(Route1States.pickup_company_choice)
 	else:
 		await message.answer("❌ Пожалуйста, напишите 1 или 2")
 		return
@@ -155,12 +169,19 @@ async def process_postal_fullname(message: Message, state: FSMContext):
 		await message.answer("❌ ФИ не может быть пусто. Укажите ваше имя:")
 		return
 	await state.update_data(postal_fullname=fullname)
-	await message.answer("Телефон получателя (для курьера/почты):")
+	# Offer to reuse user's phone or enter a new one
+	kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Оставить свой номер")]], resize_keyboard=True, one_time_keyboard=True)
+	await message.answer("Телефон получателя (для курьера/почты). Напишите номер или нажмите 'Оставить свой номер':", reply_markup=kb)
 	await state.set_state(Route1States.postal_phone)
 
 @router.message(Route1States.postal_phone)
 async def process_postal_phone(message: Message, state: FSMContext):
-	phone = message.text.strip()
+	text = (message.text or "").strip()
+	data = await state.get_data()
+	if text == "Оставить свой номер":
+		phone = data.get('phone')
+	else:
+		phone = text
 	if not phone:
 		await message.answer("❌ Телефон получателя обязателен. Укажите номер:")
 		return
@@ -181,6 +202,22 @@ async def process_pickup_company(message: Message, state: FSMContext):
 	await message.answer("Укажите адрес пункта выдачи (полный адрес с индексом):")
 	await state.set_state(Route1States.pickup_address)
 
+
+# Handle quick-selection callbacks for pickup company
+@router.callback_query(lambda c: c.data and c.data.startswith('pc:'))
+async def cb_pickup_company(callback: CallbackQuery, state: FSMContext):
+	await callback.answer()
+	val = callback.data.split(':', 1)[1]
+	if val == 'other':
+		# Ask user to input company manually
+		await state.set_state(Route1States.pickup_company)
+		await callback.message.answer('Пожалуйста, напишите название компании доставки:')
+		return
+	# Save chosen company and proceed to address
+	await state.update_data(pickup_company=val)
+	await callback.message.answer(f'Вы выбрали компанию: {val}. Укажите адрес пункта выдачи (полный адрес с индексом):')
+	await state.set_state(Route1States.pickup_address)
+
 @router.message(Route1States.pickup_address)
 async def process_pickup_address(message: Message, state: FSMContext):
 	address = message.text.strip()
@@ -198,12 +235,18 @@ async def process_pickup_fullname(message: Message, state: FSMContext):
 		await message.answer("❌ ФИ не может быть пусто. Укажите ваше имя:")
 		return
 	await state.update_data(pickup_fullname=fullname)
-	await message.answer("Телефон для получения посылки в пункте выдачи:")
+	kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Оставить свой номер")]], resize_keyboard=True, one_time_keyboard=True)
+	await message.answer("Телефон для получения посылки в пункте выдачи. Напишите номер или нажмите 'Оставить свой номер':", reply_markup=kb)
 	await state.set_state(Route1States.pickup_phone)
 
 @router.message(Route1States.pickup_phone)
 async def process_pickup_phone(message: Message, state: FSMContext):
-	phone = message.text.strip()
+	text = (message.text or "").strip()
+	data = await state.get_data()
+	if text == "Оставить свой номер":
+		phone = data.get('phone')
+	else:
+		phone = text
 	if not phone:
 		await message.answer("❌ Телефон обязателен. Укажите номер:")
 		return
@@ -219,7 +262,12 @@ async def process_wishlist(message: Message, state: FSMContext):
 	# If user chose to fill survey, start survey flow
 	if wishlist.lower() in ("заполнить анкету", "анкета", "не знаю", "не знаю что написать"):
 		await message.answer("Вы выбрали заполнение анкеты. Отвечайте кратко на вопросы.")
-		await message.answer("1) Какой ваш любимый цвет?\n(например: Красный / Синий / Зеленый / Другой)")
+		# Send buttons for q1
+		kb = InlineKeyboardMarkup(inline_keyboard=[
+			[InlineKeyboardButton(text="Красный", callback_data="s1:Красный"), InlineKeyboardButton(text="Синий", callback_data="s1:Синий")],
+			[InlineKeyboardButton(text="Зеленый", callback_data="s1:Зеленый"), InlineKeyboardButton(text="Другое", callback_data="s1:other")],
+		])
+		await message.answer("1) Какой ваш любимый цвет? Выберите вариант или напишите свой:", reply_markup=kb)
 		await state.set_state(Route1States.survey_q1)
 		return
 
@@ -283,33 +331,55 @@ async def process_wishlist(message: Message, state: FSMContext):
 	logger.info(f"User {message.from_user.id} submitting route1 entry: pickup_type={pickup_type}, email={email}")
 	await save_route1_entry(message.from_user.id, **entry_kwargs)
 	
-	await message.answer("✅ Спасибо! Ваша регистрация в маршруте 1 успешно сохранена. Ждём вас 21 декабря! 🎄")
+	is_admin = message.from_user.id in ADMIN_IDS
+	await message.answer("✅ Спасибо! Ваша регистрация в Тайном Санте успешно сохранена. Ждём вас 21 декабря! 🎄", reply_markup=reply_menu(is_admin=is_admin))
 	await state.clear()
 
 
 # ===== SURVEY HANDLERS =====
 @router.message(Route1States.survey_q1)
 async def survey_q1(message: Message, state: FSMContext):
-	answer = message.text.strip()
-	await state.update_data(s_q1=answer)
-	await message.answer("2) Какой ваш любимый вид деятельности?\n(Чтение книг / Спорт / Рисование / Путешествия / Другой)")
-	await state.set_state(Route1States.survey_q2)
+	# If user typed an answer (free text), save it and move to q2
+	answer = (message.text or "").strip()
+	if answer:
+		await state.update_data(s_q1=answer)
+		# Send buttons for q2
+		kb = InlineKeyboardMarkup(inline_keyboard=[
+			[InlineKeyboardButton(text="Чтение книг", callback_data="s2:Чтение книг"), InlineKeyboardButton(text="Спорт", callback_data="s2:Спорт")],
+			[InlineKeyboardButton(text="Рисование", callback_data="s2:Рисование"), InlineKeyboardButton(text="Путешествия", callback_data="s2:Путешествия")],
+			[InlineKeyboardButton(text="Другое", callback_data="s2:other")],
+		])
+		await message.answer("2) Какой ваш любимый вид деятельности? Выберите вариант или напишите свой:", reply_markup=kb)
+		await state.set_state(Route1States.survey_q2)
+		return
 
 
 @router.message(Route1States.survey_q2)
 async def survey_q2(message: Message, state: FSMContext):
-	answer = message.text.strip()
-	await state.update_data(s_q2=answer)
-	await message.answer("3) Какой ваш любимый жанр музыки или фильма?\n(Поп / Рок / Классика / Ужасы / Комедия / Другой)")
-	await state.set_state(Route1States.survey_q3)
+	# If user typed an answer (free text), save it and move to q3
+	answer = (message.text or "").strip()
+	if answer:
+		await state.update_data(s_q2=answer)
+		# Send buttons for q3
+		kb = InlineKeyboardMarkup(inline_keyboard=[
+			[InlineKeyboardButton(text="Поп", callback_data="s3:Поп"), InlineKeyboardButton(text="Рок", callback_data="s3:Рок")],
+			[InlineKeyboardButton(text="Классика", callback_data="s3:Классика"), InlineKeyboardButton(text="Ужасы", callback_data="s3:Ужасы")],
+			[InlineKeyboardButton(text="Комедия", callback_data="s3:Комедия"), InlineKeyboardButton(text="Другое", callback_data="s3:other")],
+		])
+		await message.answer("3) Какой ваш любимый жанр музыки или фильма? Выберите вариант или напишите свой:", reply_markup=kb)
+		await state.set_state(Route1States.survey_q3)
+		return
 
 
 @router.message(Route1States.survey_q3)
 async def survey_q3(message: Message, state: FSMContext):
-	answer = message.text.strip()
-	await state.update_data(s_q3=answer)
-	await message.answer("4) Есть ли у вас хобби или увлечения? Пожалуйста, опишите:")
-	await state.set_state(Route1States.survey_q4)
+	# If user typed an answer (free text), save it and move to q4
+	answer = (message.text or "").strip()
+	if answer:
+		await state.update_data(s_q3=answer)
+		await message.answer("4) Есть ли у вас хобби или увлечения? Пожалуйста, опишите:")
+		await state.set_state(Route1States.survey_q4)
+		return
 
 
 @router.message(Route1States.survey_q4)
@@ -427,8 +497,83 @@ async def survey_q8(message: Message, state: FSMContext):
 		})
 
 	await save_route1_entry(message.from_user.id, survey=survey_dict, **entry_kwargs)
-	await message.answer("✅ Спасибо! Анкета и регистрация сохранены. Ждём вас 21 декабря! 🎄")
+	is_admin = message.from_user.id in ADMIN_IDS
+	await message.answer("✅ Спасибо! Анкета и регистрация сохранены. Ждём вас 21 декабря! 🎄", reply_markup=reply_menu(is_admin=is_admin))
 	await state.clear()
+
+
+# ---- Callback handlers for quick choices (q1-q3) ----
+@router.callback_query(lambda c: c.data and c.data.startswith('s1:'))
+async def cb_s1(callback: CallbackQuery, state: FSMContext):
+	await callback.answer()
+	val = callback.data.split(':', 1)[1]
+	if val == 'other':
+		await state.set_state(Route1States.survey_q1_other)
+		await callback.message.answer('Напишите свой вариант для "Любимый цвет":')
+		return
+	await state.update_data(s_q1=val)
+	await callback.message.answer('2) Какой ваш любимый вид деятельности?')
+	await state.set_state(Route1States.survey_q2)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith('s2:'))
+async def cb_s2(callback: CallbackQuery, state: FSMContext):
+	await callback.answer()
+	val = callback.data.split(':', 1)[1]
+	if val == 'other':
+		await state.set_state(Route1States.survey_q2_other)
+		await callback.message.answer('Напишите свой вариант для "Вид деятельности":')
+		return
+	await state.update_data(s_q2=val)
+	await callback.message.answer('3) Какой ваш любимый жанр музыки или фильма?')
+	await state.set_state(Route1States.survey_q3)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith('s3:'))
+async def cb_s3(callback: CallbackQuery, state: FSMContext):
+	await callback.answer()
+	val = callback.data.split(':', 1)[1]
+	if val == 'other':
+		await state.set_state(Route1States.survey_q3_other)
+		await callback.message.answer('Напишите свой вариант для "Жанр":')
+		return
+	await state.update_data(s_q3=val)
+	await callback.message.answer('4) Есть ли у вас хобби или увлечения? Пожалуйста, опишите:')
+	await state.set_state(Route1States.survey_q4)
+
+
+# ---- Handlers for "Другое" free-text after pressing Другое ----
+@router.message(Route1States.survey_q1_other)
+async def survey_q1_other(message: Message, state: FSMContext):
+	answer = (message.text or '').strip()
+	if not answer:
+		await message.answer('Пожалуйста, введите ваш вариант:')
+		return
+	await state.update_data(s_q1=answer)
+	await message.answer('2) Какой ваш любимый вид деятельности?')
+	await state.set_state(Route1States.survey_q2)
+
+
+@router.message(Route1States.survey_q2_other)
+async def survey_q2_other(message: Message, state: FSMContext):
+	answer = (message.text or '').strip()
+	if not answer:
+		await message.answer('Пожалуйста, введите ваш вариант:')
+		return
+	await state.update_data(s_q2=answer)
+	await message.answer('3) Какой ваш любимый жанр музыки или фильма?')
+	await state.set_state(Route1States.survey_q3)
+
+
+@router.message(Route1States.survey_q3_other)
+async def survey_q3_other(message: Message, state: FSMContext):
+	answer = (message.text or '').strip()
+	if not answer:
+		await message.answer('Пожалуйста, введите ваш вариант:')
+		return
+	await state.update_data(s_q3=answer)
+	await message.answer('4) Есть ли у вас хобби или увлечения? Пожалуйста, опишите:')
+	await state.set_state(Route1States.survey_q4)
 
 
 @router.message(Command("cancel"))

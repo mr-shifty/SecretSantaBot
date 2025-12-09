@@ -295,7 +295,14 @@ async def ui_route1(request: Request):
 	async with async_session as session:
 		result = await session.execute(select(Route1Entry))
 		entries = result.scalars().all()
-	return templates.TemplateResponse("list_route1.html", {"request": request, "entries": entries})
+		# preload users for mapping usernames
+		user_ids = [e.user_id for e in entries]
+		users = {}
+		if user_ids:
+			result = await session.execute(select(User).where(User.id.in_(user_ids)))
+			for u in result.scalars().all():
+				users[u.id] = u
+	return templates.TemplateResponse("list_route1.html", {"request": request, "entries": entries, "users": users})
 
 
 @app.get("/admin/route1/{entry_id}/edit")
@@ -436,7 +443,13 @@ async def ui_route2(request: Request):
 	async with async_session as session:
 		result = await session.execute(select(Route2Entry))
 		entries = result.scalars().all()
-	return templates.TemplateResponse("list_route2.html", {"request": request, "entries": entries})
+		user_ids = [e.user_id for e in entries]
+		users = {}
+		if user_ids:
+			result = await session.execute(select(User).where(User.id.in_(user_ids)))
+			for u in result.scalars().all():
+				users[u.id] = u
+	return templates.TemplateResponse("list_route2.html", {"request": request, "entries": entries, "users": users})
 
 
 @app.get("/admin/route2/{entry_id}/edit")
@@ -542,7 +555,17 @@ async def ui_assignments(request: Request):
 	async with async_session as session:
 		result = await session.execute(select(Assignment))
 		assignments = result.scalars().all()
-	return templates.TemplateResponse("list_assignments.html", {"request": request, "assignments": assignments})
+		# preload users for display
+		user_ids = set()
+		for a in assignments:
+			user_ids.add(a.giver_user_id)
+			user_ids.add(a.receiver_user_id)
+		users = {}
+		if user_ids:
+			result = await session.execute(select(User).where(User.id.in_(list(user_ids))))
+			for u in result.scalars().all():
+				users[u.id] = u
+	return templates.TemplateResponse("list_assignments.html", {"request": request, "assignments": assignments, "users": users})
 
 
 @app.post("/admin/assignments/{assignment_id}/mark")

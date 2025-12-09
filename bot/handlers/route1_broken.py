@@ -21,7 +21,7 @@ async def cmd_route1(message: Message, state: FSMContext):
 	
 	logger.info(f"User {message.from_user.id} started route1 registration")
 	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
-	await message.answer("🎁 Добро пожаловать в Тайного Санту (Маршрут 1)!\n\nПожалуйста, введите ваш email:")
+	await message.answer("🎁 Добро пожаловать в «Тайный Санта (с подарками)»!\n\nПожалуйста, введите ваш email:")
 	await state.set_state(Route1States.email)
 
 
@@ -31,7 +31,7 @@ async def start_anketa(message: Message, state: FSMContext):
 	# Prevent starting if already in an active route1
 	has_active = await check_active_route1_entry(message.from_user.id)
 	if has_active:
-		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 1. Если хотите обновить анкету, сначала отмените старую заявку.")
+		await message.answer("⚠️ У вас уже есть активная заявка на участие в Тайном Санте. Если хотите обновить анкету, сначала отмените старую заявку или попробуйте Диджитал Санту")
 		return
 
 	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
@@ -283,7 +283,7 @@ async def process_wishlist(message: Message, state: FSMContext):
 	logger.info(f"User {message.from_user.id} submitting route1 entry: pickup_type={pickup_type}, email={email}")
 	await save_route1_entry(message.from_user.id, **entry_kwargs)
 	
-	await message.answer("✅ Спасибо! Ваша регистрация в маршруте 1 успешно сохранена. Ждём вас 21 декабря! 🎄")
+	await message.answer("✅ Спасибо! Ваша регистрация в Тайном Санте успешно сохранена. Ждём вас 21 декабря! 🎄")
 	await state.clear()
 
 
