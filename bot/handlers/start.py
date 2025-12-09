@@ -21,7 +21,7 @@ async def cmd_start(message: Message):
     await message.answer("Выберите маршрут:", reply_markup=reply_menu(is_admin=is_admin))
 
 
-@router.message(lambda message: (message.text or "").strip() in ("Маршрут 1", "Регистрация с подарками", "Тайный Санта (с подарками)", "Тайный Санта"))
+@router.message(lambda message: (message.text or "").strip().lower() in ("маршрут 1", "регистрация с подарками", "тайный санта (с подарками)", "тайный санта"))
 async def text_start_route1(message: Message, state: FSMContext):
     user = message.from_user
     has_active = await check_active_route1_entry(user.id)
@@ -36,7 +36,7 @@ async def text_start_route1(message: Message, state: FSMContext):
     await state.set_state(Route1States.email)
 
 
-@router.message(lambda message: (message.text or "").strip() in ("Маршрут 2", "Регистрация с поздравлениями", "Диджитал Санта (с поздравлениями)", "Диджитал Санта"))
+@router.message(lambda message: (message.text or "").strip().lower() in ("маршрут 2", "регистрация с поздравлениями", "диджитал санта (с поздравлениями)", "диджитал санта"))
 async def text_start_route2(message: Message, state: FSMContext):
     user = message.from_user
     has_active = await check_active_route2_entry(user.id)
@@ -51,7 +51,7 @@ async def text_start_route2(message: Message, state: FSMContext):
     await state.set_state(Route2States.email)
 
 
-@router.message(lambda message: (message.text or "").strip() == "Админ")
+@router.message(lambda message: (message.text or "").strip().lower() == "админ")
 async def text_admin(message: Message):
     user = message.from_user
     if user.id not in ADMIN_IDS:

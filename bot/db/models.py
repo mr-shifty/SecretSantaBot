@@ -97,3 +97,10 @@ class NotificationLog(Base):
     status = Column(String, default="pending")  # pending/sent/failed
     sent_at = Column(DateTime, nullable=True)
 
+
+class Setting(Base):
+    """Key-value settings stored in DB. Values stored as JSON."""
+    __tablename__ = "settings"
+    key = Column(String, primary_key=True)
+    value = Column(JSON, nullable=True)
+

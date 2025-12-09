@@ -28,7 +28,7 @@ async def cmd_route1(message: Message, state: FSMContext):
 	await state.set_state(Route1States.email)
 
 
-@router.message(lambda message: (message.text or "").strip().lower() == "анкета")
+@router.message(lambda message: (message.text or "").strip().lower() in ("анкета", "заполнить анкету"))
 async def start_anketa(message: Message, state: FSMContext):
 	"""Start survey-only flow (ask minimal contact info then survey)."""
 	# Prevent starting if already in an active route1
@@ -178,7 +178,7 @@ async def process_postal_fullname(message: Message, state: FSMContext):
 async def process_postal_phone(message: Message, state: FSMContext):
 	text = (message.text or "").strip()
 	data = await state.get_data()
-	if text == "Оставить свой номер":
+	if text.lower() == "оставить свой номер":
 		phone = data.get('phone')
 	else:
 		phone = text
@@ -243,7 +243,7 @@ async def process_pickup_fullname(message: Message, state: FSMContext):
 async def process_pickup_phone(message: Message, state: FSMContext):
 	text = (message.text or "").strip()
 	data = await state.get_data()
-	if text == "Оставить свой номер":
+	if text.lower() == "оставить свой номер":
 		phone = data.get('phone')
 	else:
 		phone = text

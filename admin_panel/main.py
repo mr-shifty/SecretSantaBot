@@ -9,9 +9,10 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy import select
 from bot.db.database import init_db, get_session
-from bot.db.models import User, Route1Entry, Route2Entry, Assignment, NotificationLog
+from bot.db.models import User, Route1Entry, Route2Entry, Assignment, NotificationLog, Setting
 from bot.randomizer import perform_draw
 from bot.logger import get_logger
+import json
 
 logger = get_logger("admin_panel")
 app = FastAPI(title="Secret Santa Admin Panel", version="1.0.0")
@@ -27,6 +28,70 @@ app.mount("/media", StaticFiles(directory="media"), name="media")
 # Simple admin UI auth (password from env)
 import os
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "changeme")
+SETTINGS_PATH = os.path.join(os.path.dirname(__file__), 'settings.json')
+
+
+def load_settings() -> dict:
+	defaults = {
+		'assignment_reminder_hours': 48,
+		'assignment_reminder_max': 3,
+		'registration_reminder_hours': 24,
+		'reminder_enabled': True,
+	}
+	try:
+		if os.path.exists(SETTINGS_PATH):
+			with open(SETTINGS_PATH, 'r', encoding='utf-8') as f:
+				data = json.load(f)
+				defaults.update(data)
+	except Exception:
+		pass
+	return defaults
+
+
+async def load_settings_async() -> dict:
+	"""Async loader for settings: merge JSON defaults with DB-stored settings when available."""
+	# Start from JSON/defaults for backward compatibility
+	settings = load_settings()
+	# Try to read overrides from DB
+	try:
+		async_session = get_session()
+		async with async_session as session:
+			result = await session.execute(select(Setting))
+			rows = result.scalars().all()
+			for r in rows:
+				# Setting.value is stored as JSON-serializable object; merge
+				try:
+					settings[r.key] = r.value
+				except Exception:
+					settings[r.key] = r.value
+	except Exception:
+		# If DB unavailable, fall back to JSON-only settings
+			pass
+	return settings
+
+
+def save_settings(data: dict):
+	try:
+		with open(SETTINGS_PATH, 'w', encoding='utf-8') as f:
+			json.dump(data, f, ensure_ascii=False, indent=2)
+	except Exception:
+		pass
+
+
+async def save_settings_to_db(data: dict):
+	"""Persist settings into DB (async). Creates/updates rows in `settings` table."""
+	async_session = get_session()
+	async with async_session as session:
+		for k, v in data.items():
+			# upsert
+			result = await session.execute(select(Setting).where(Setting.key == k))
+			rec = result.scalar_one_or_none()
+			if rec:
+				rec.value = v
+				session.add(rec)
+			else:
+				session.add(Setting(key=k, value=v))
+		await session.commit()
 
 
 # ===== Pydantic models for request/response =====
@@ -303,6 +368,33 @@ async def ui_route1(request: Request):
 			for u in result.scalars().all():
 				users[u.id] = u
 	return templates.TemplateResponse("list_route1.html", {"request": request, "entries": entries, "users": users})
+
+
+@app.get("/admin/settings")
+async def ui_settings(request: Request):
+	if not is_admin_ui(request):
+		return RedirectResponse(url="/admin")
+	settings = await load_settings_async()
+	return templates.TemplateResponse("edit_settings.html", {"request": request, "settings": settings})
+
+
+@app.post("/admin/settings")
+async def ui_settings_post(request: Request, assignment_reminder_hours: int = Form(48), registration_reminder_hours: int = Form(24), assignment_reminder_max: int = Form(3), reminder_enabled: str | None = Form(None)):
+	if not is_admin_ui(request):
+		return RedirectResponse(url="/admin")
+	settings = await load_settings_async()
+	settings['assignment_reminder_hours'] = int(assignment_reminder_hours)
+	settings['registration_reminder_hours'] = int(registration_reminder_hours)
+	settings['assignment_reminder_max'] = int(assignment_reminder_max)
+	settings['reminder_enabled'] = bool(reminder_enabled)
+	# Save to JSON file for backward compatibility
+	save_settings(settings)
+	# Also persist to DB asynchronously
+	try:
+		await save_settings_to_db(settings)
+	except Exception:
+		logger.exception("Failed to save settings to DB; falling back to JSON only")
+	return RedirectResponse(url="/admin/settings", status_code=302)
 
 
 @app.get("/admin/route1/{entry_id}/edit")
@@ -630,7 +722,7 @@ async def export_route1():
 	logger.debug(f"Exporting {len(entries)} route1 entries")
 	output = io.StringIO()
 	writer = csv.writer(output)
-	writer.writerow(['ID', 'Telegram ID', 'Email', 'Адрес', 'Способ доставки', 'Пожелания/Анкета', 'Статус'])
+	writer.writerow(['ID', 'Telegram ID', 'Telegram Username', 'Email', 'Адрес', 'Способ доставки', 'Пожелания/Анкета', 'Статус'])
 
 	for entry in entries:
 		async with async_session as session:
@@ -640,6 +732,7 @@ async def export_route1():
 		writer.writerow([
 			entry.id,
 			user.telegram_id if user else '',
+			user.telegram_username if user else '',
 			entry.email,
 			entry.full_address,
 			entry.delivery_method or '',
@@ -667,7 +760,7 @@ async def export_route2():
 	logger.debug(f"Exporting {len(entries)} route2 entries")
 	output = io.StringIO()
 	writer = csv.writer(output)
-	writer.writerow(['ID', 'Telegram ID', 'Email', 'Статус'])
+	writer.writerow(['ID', 'Telegram ID', 'Telegram Username', 'Email', 'Статус'])
 
 	for entry in entries:
 		async with async_session as session:
@@ -677,6 +770,7 @@ async def export_route2():
 		writer.writerow([
 			entry.id,
 			user.telegram_id if user else '',
+			user.telegram_username if user else '',
 			entry.email,
 			entry.status
 		])

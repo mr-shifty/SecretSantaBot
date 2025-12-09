@@ -205,16 +205,31 @@ async def cb_admin_notify(callback: CallbackQuery):
 				await session.commit()
 				nlogs_created.append(nlog)
 
-			# Build combined message from parts (each part already contains route-specific header)
+			# Build combined message from parts (each part already contains route-specific details)
 			send_text = "\n---\n".join(parts)
-			# Add recommended amount note if any route1 parts exist
-			if any(a.route_type == 1 for a in giver_assignments):
+			has_r1 = any(a.route_type == 1 for a in giver_assignments)
+			has_r2 = any(a.route_type == 2 for a in giver_assignments)
+			# Prefix rules:
+			# - only route1: "Ваш тайный санта найден"
+			# - only route2: if single assignment include @username, else plural header
+			# - mixed: keep the Тайный Санта header
+			if has_r1 and not has_r2:
 				send_text = "Ваш тайный санта найден\n\n" + send_text
-			if any(a.route_type == 2 for a in giver_assignments):
-				# If both types present, ensure digital notice appears too (with usernames included in parts)
-				send_text = ("Ваш диджитал санта найден\n\n" + send_text) if not any(a.route_type == 1 for a in giver_assignments) else send_text
+			elif has_r2 and not has_r1:
+				# only digital assignments
+				if len(giver_assignments) == 1:
+					first_assignment = giver_assignments[0]
+					result = await session.execute(select(User).where(User.id == first_assignment.receiver_user_id))
+					first_receiver = result.scalar_one_or_none()
+					recv_display = (('@' + first_receiver.telegram_username) if first_receiver and first_receiver.telegram_username else (first_receiver.first_name or 'Получатель'))
+					send_text = f"Ваш диджитал санта найден {recv_display}\n\n" + send_text
+				else:
+					send_text = "Ваши диджитал санты найдены\n\n" + send_text
+			else:
+				# mixed types — lead with тайный санта header
+				send_text = "Ваш тайный санта найден\n\n" + send_text
 			# Append recommendation only when route1 present
-			if any(a.route_type == 1 for a in giver_assignments):
+			if has_r1:
 				send_text += "\nРекомендуемая сумма для подарка не более 1000 р.\n"
 
 			# Update payloads of nlogs created for this giver to include full text
@@ -259,7 +274,7 @@ async def cb_admin_notify(callback: CallbackQuery):
 	await callback.message.answer(f"✅ Отправлено уведомлений: {sent_count}\n✳️ Пропущено (режим теста): {skipped_count}\n❗ Ошибок: {failed_count}")
 
 
-@router.message(lambda message: (message.text or "").strip() == "Подарок отправлен")
+@router.message(lambda message: (message.text or "").strip().lower() in ("подарок отправлен", "поздравление отправлено"))
 async def msg_mark_sent(message: Message):
 	"""Allow user to mark their assignment as sent by pressing reply keyboard button."""
 	# resolve internal user id
@@ -275,11 +290,11 @@ async def msg_mark_sent(message: Message):
 
 		# Determine which button user pressed and mark the corresponding route assignment
 		text = (message.text or '').strip()
-		# Map button text to route_type
-		if text == 'Подарок отправлен':
+		# Map button text to route_type (case-insensitive)
+		if text.lower() == 'подарок отправлен':
 			route_filter = 1
 			success_msg = 'Спасибо — статус подарка помечен как отправлено ✅'
-		elif text == 'Поздравление отправлено':
+		elif text.lower() == 'поздравление отправлено':
 			route_filter = 2
 			success_msg = 'Спасибо — статус поздравления помечен как отправлено ✅'
 		else:
@@ -297,6 +312,53 @@ async def msg_mark_sent(message: Message):
 
 		assignment.sent_status = 'sent'
 		await session.commit()
+
+	# Notify receiver about sent status (same logic as inline callback)
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(User).where(User.id == assignment.receiver_user_id))
+		receiver = result.scalar_one_or_none()
+		if assignment.route_type == 1:
+			result = await session.execute(
+				select(Route1Entry).where(Route1Entry.user_id == assignment.receiver_user_id).where(Route1Entry.status == 'completed')
+			)
+			rentry = result.scalar_one_or_none()
+			method = ''
+			if rentry:
+				if rentry.pickup_type == 'postal':
+					method = f"Почта: {rentry.full_address}"
+				else:
+					method = f"Пункт выдачи: {rentry.pickup_company or ''}, {rentry.pickup_address or ''}"
+		else:
+			result = await session.execute(
+				select(Route2Entry).where(Route2Entry.user_id == assignment.receiver_user_id).where(Route2Entry.status == 'completed')
+			)
+			rentry = result.scalar_one_or_none()
+			method = ''
+			if rentry:
+				method = f"Email: {rentry.email or ''}"
+
+		notif_text = ''
+		if assignment.route_type == 1:
+			notif_text = f"Ваш тайный санта отправил вам подарок. Способ доставки: {method}"
+		else:
+			notif_text = f"Ваш диджитал санта отправил вам поздравление. {method}"
+
+		nlog = NotificationLog(user_id=assignment.receiver_user_id, channel='telegram', notif_type='assignment_received', payload=notif_text, status='pending')
+		session.add(nlog)
+		await session.commit()
+
+		if receiver and receiver.telegram_id:
+			try:
+				await message.bot.send_message(chat_id=receiver.telegram_id, text=notif_text)
+				nlog.status = 'sent'
+				nlog.sent_at = datetime.utcnow()
+				session.add(nlog)
+				await session.commit()
+			except Exception:
+				nlog.status = 'failed'
+				session.add(nlog)
+				await session.commit()
 
 	await message.answer(success_msg, reply_markup=ReplyKeyboardRemove())
 
@@ -337,6 +399,57 @@ async def cb_mark_sent(callback: CallbackQuery):
 
 		assignment.sent_status = 'sent'
 		await session.commit()
+
+	# Notify receiver that gift/congrats was sent and include method
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(User).where(User.id == assignment.receiver_user_id))
+		receiver = result.scalar_one_or_none()
+		# find receiver's latest entry to describe method
+		if assignment.route_type == 1:
+			result = await session.execute(
+				select(Route1Entry).where(Route1Entry.user_id == assignment.receiver_user_id).where(Route1Entry.status == 'completed')
+			)
+			rentry = result.scalar_one_or_none()
+			method = ''
+			if rentry:
+				if rentry.pickup_type == 'postal':
+					method = f"Почта: {rentry.full_address}"
+				else:
+					method = f"Пункт выдачи: {rentry.pickup_company or ''}, {rentry.pickup_address or ''}"
+		else:
+			# route 2
+			result = await session.execute(
+				select(Route2Entry).where(Route2Entry.user_id == assignment.receiver_user_id).where(Route2Entry.status == 'completed')
+			)
+			rentry = result.scalar_one_or_none()
+			method = ''
+			if rentry:
+				method = f"Email: {rentry.email or ''}"
+
+		# Create log for receiver
+		notif_text = ''
+		if assignment.route_type == 1:
+			notif_text = f"Ваш тайный санта отправил вам подарок. Способ доставки: {method}"
+		else:
+			notif_text = f"Ваш диджитал санта отправил вам поздравление. {method}"
+
+		nlog = NotificationLog(user_id=assignment.receiver_user_id, channel='telegram', notif_type='assignment_received', payload=notif_text, status='pending')
+		session.add(nlog)
+		await session.commit()
+
+		# send to receiver if we have telegram id
+		if receiver and receiver.telegram_id:
+			try:
+				await callback.bot.send_message(chat_id=receiver.telegram_id, text=notif_text)
+				nlog.status = 'sent'
+				nlog.sent_at = datetime.utcnow()
+				session.add(nlog)
+				await session.commit()
+			except Exception:
+				nlog.status = 'failed'
+				session.add(nlog)
+				await session.commit()
 
 	await callback.message.answer('Статус назначение обновлён: отправлено ✅')
 
