@@ -1,5 +1,4 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from bot.config import ADMIN_IDS
 
 
 def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:

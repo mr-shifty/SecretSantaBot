@@ -6,7 +6,8 @@ from aiogram.filters import Command
 from aiogram.types import Message, Document, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from sqlalchemy import delete
 from aiogram.fsm.context import FSMContext
-from bot.config import ADMIN_IDS, SEND_REAL_NOTIFICATIONS
+from bot.config import SEND_REAL_NOTIFICATIONS
+from bot.utils import is_admin
 from bot.randomizer import perform_draw
 from bot.db.models import User, Route1Entry, Route2Entry, Assignment, NotificationLog
 from bot.db.database import get_session
@@ -18,15 +19,14 @@ logger = get_logger("admin")
 router = Router()
 
 
-def is_admin(user_id: int) -> bool:
-	return user_id in ADMIN_IDS
+# use `is_admin` from `bot.utils` (async)
 
 
 @router.callback_query(lambda c: c.data == "admin_draw_r1")
 async def cb_admin_draw_r1(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_draw_r1")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -45,7 +45,7 @@ async def cb_admin_draw_r1(callback: CallbackQuery):
 async def cb_admin_draw_r2(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_draw_r2")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -64,7 +64,7 @@ async def cb_admin_draw_r2(callback: CallbackQuery):
 async def cb_admin_notify(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_notify")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -237,9 +237,9 @@ async def cb_admin_notify(callback: CallbackQuery):
 				nl.payload = send_text
 				session.add(nl)
 
-			# Safe-send: when SEND_REAL_NOTIFICATIONS is False (default), only ADMIN_IDS receive messages
-			if not SEND_REAL_NOTIFICATIONS and giver.telegram_id not in ADMIN_IDS:
-				logger.info(f"Skipping send to {giver.telegram_id} (not in ADMIN_IDS) — logged only")
+			# Safe-send: when SEND_REAL_NOTIFICATIONS is False (default), only admins receive messages
+			if not SEND_REAL_NOTIFICATIONS and not await is_admin(giver.telegram_id):
+				logger.info(f"Skipping send to {giver.telegram_id} (not an admin) — logged only")
 				skipped_count += 1
 				await session.commit()
 				continue
@@ -393,7 +393,7 @@ async def cb_mark_sent(callback: CallbackQuery):
 			return
 
 		# Only the giver (by telegram_id) or admins can mark as sent
-		if user_id != giver.telegram_id and user_id not in ADMIN_IDS:
+			if user_id != giver.telegram_id and not await is_admin(user_id):
 			await callback.message.answer('❌ Вы не можете изменить статус этого назначения')
 			return
 
@@ -458,7 +458,7 @@ async def cb_mark_sent(callback: CallbackQuery):
 async def cb_admin_export(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_export")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -545,7 +545,7 @@ async def cb_admin_close(callback: CallbackQuery):
 async def cb_admin_reset(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_reset")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -564,7 +564,7 @@ async def cb_admin_reset(callback: CallbackQuery):
 
 @router.message(Command("draw"))
 async def cmd_draw(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		await message.answer("❌ У вас нет прав администратора")
 		return
 	
@@ -573,7 +573,7 @@ async def cmd_draw(message: Message):
 
 @router.message(Command("draw_route1"))
 async def cmd_draw_route1(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /draw_route1")
 		await message.answer("❌ У вас нет прав администратора")
 		return
@@ -590,7 +590,7 @@ async def cmd_draw_route1(message: Message):
 
 @router.message(Command("draw_route2"))
 async def cmd_draw_route2(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /draw_route2")
 		await message.answer("❌ У вас нет прав администратора")
 		return
@@ -607,7 +607,7 @@ async def cmd_draw_route2(message: Message):
 
 @router.message(Command("notify_route1"))
 async def cmd_notify_route1(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /notify_route1")
 		await message.answer("❌ У вас нет прав администратора")
 		return
@@ -692,8 +692,8 @@ async def cmd_notify_route1(message: Message):
 			session.add(nlog)
 			await session.commit()
 
-			if not SEND_REAL_NOTIFICATIONS and giver.telegram_id not in ADMIN_IDS:
-				logger.info(f"Skipping send to {giver.telegram_id} (not in ADMIN_IDS) — logged only")
+			if not SEND_REAL_NOTIFICATIONS and not await is_admin(giver.telegram_id):
+				logger.info(f"Skipping send to {giver.telegram_id} (not an admin) — logged only")
 				skipped_count += 1
 				continue
 
@@ -719,7 +719,7 @@ async def cmd_notify_route1(message: Message):
 
 @router.message(Command("notify_route2"))
 async def cmd_notify_route2(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /notify_route2")
 		await message.answer("❌ У вас нет прав администратора")
 		return
@@ -746,7 +746,7 @@ async def cmd_notify_route2(message: Message):
 
 @router.message(Command("export_route1"))
 async def cmd_export_route1(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /export_route1")
 		await message.answer("❌ У вас нет прав администратора")
 		return

@@ -7,7 +7,7 @@ from bot.utils import get_or_create_user, is_valid_email, save_route1_entry, che
 from bot.logger import get_logger
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from bot.keyboards import reply_menu
-from bot.config import ADMIN_IDS
+from bot.utils import is_admin
 from aiogram.types import CallbackQuery
 
 logger = get_logger("route1")
@@ -331,8 +331,8 @@ async def process_wishlist(message: Message, state: FSMContext):
 	logger.info(f"User {message.from_user.id} submitting route1 entry: pickup_type={pickup_type}, email={email}")
 	await save_route1_entry(message.from_user.id, **entry_kwargs)
 	
-	is_admin = message.from_user.id in ADMIN_IDS
-	await message.answer("✅ Спасибо! Ваша регистрация в Тайном Санте успешно сохранена. Ждём вас 21 декабря! 🎄", reply_markup=reply_menu(is_admin=is_admin))
+	is_admin_flag = await is_admin(message.from_user.id)
+	await message.answer("✅ Спасибо! Ваша регистрация в Тайном Санте успешно сохранена. Ждём вас 21 декабря! 🎄", reply_markup=reply_menu(is_admin=is_admin_flag))
 	await state.clear()
 
 
@@ -497,8 +497,8 @@ async def survey_q8(message: Message, state: FSMContext):
 		})
 
 	await save_route1_entry(message.from_user.id, survey=survey_dict, **entry_kwargs)
-	is_admin = message.from_user.id in ADMIN_IDS
-	await message.answer("✅ Спасибо! Анкета и регистрация сохранены. Ждём вас 21 декабря! 🎄", reply_markup=reply_menu(is_admin=is_admin))
+	is_admin_flag = await is_admin(message.from_user.id)
+	await message.answer("✅ Спасибо! Анкета и регистрация сохранены. Ждём вас 21 декабря! 🎄", reply_markup=reply_menu(is_admin=is_admin_flag))
 	await state.clear()
 
 

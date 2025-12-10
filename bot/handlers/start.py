@@ -4,7 +4,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from bot.logger import get_logger
 from bot.keyboards import main_menu, admin_menu, reply_menu
-from bot.config import ADMIN_IDS
+from bot.utils import is_admin
 from bot.utils import get_or_create_user, check_active_route1_entry, check_active_route2_entry
 from bot.states import Route1States, Route2States
 
@@ -15,10 +15,10 @@ router = Router()
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     """Send main menu with buttons."""
-    is_admin = message.from_user.id in ADMIN_IDS
-    logger.info(f"User {message.from_user.id} requested /start (admin={is_admin})")
+    is_admin_flag = await is_admin(message.from_user.id)
+    logger.info(f"User {message.from_user.id} requested /start (admin={is_admin_flag})")
     # Show reply keyboard (buttons at bottom)
-    await message.answer("Выберите маршрут:", reply_markup=reply_menu(is_admin=is_admin))
+    await message.answer("Выберите маршрут:", reply_markup=reply_menu(is_admin=is_admin_flag))
 
 
 @router.message(lambda message: (message.text or "").strip().lower() in ("маршрут 1", "регистрация с подарками", "тайный санта (с подарками)", "тайный санта"))
@@ -54,7 +54,7 @@ async def text_start_route2(message: Message, state: FSMContext):
 @router.message(lambda message: (message.text or "").strip().lower() == "админ")
 async def text_admin(message: Message):
     user = message.from_user
-    if user.id not in ADMIN_IDS:
+    if not await is_admin(user.id):
         logger.warning(f"Non-admin user {user.id} attempted to open admin via text button")
         await message.answer("❌ У вас нет прав администратора")
         return
@@ -67,7 +67,7 @@ async def text_admin(message: Message):
 async def cb_admin_panel(callback: CallbackQuery):
     await callback.answer()
     user = callback.from_user
-    if user.id not in ADMIN_IDS:
+    if not await is_admin(user.id):
         logger.warning(f"Non-admin user {user.id} attempted to open admin panel")
         await callback.message.answer("❌ У вас нет прав администратора")
         return

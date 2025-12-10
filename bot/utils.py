@@ -4,7 +4,7 @@ from typing import Optional
 from datetime import datetime
 from sqlalchemy import select
 import json
-from bot.db.models import User, Route1Entry, Route2Entry
+from bot.db.models import User, Route1Entry, Route2Entry, Setting
 from bot.db.database import get_session
 from bot.logger import get_logger
 
@@ -207,3 +207,32 @@ async def check_active_route2_entry(user_id: int) -> bool:
 			).where(Route2Entry.status == "completed")
 		)
 		return result.scalar_one_or_none() is not None
+
+
+async def is_admin(user_identifier: int) -> bool:
+	"""Return True if given identifier (telegram id or internal id) is an admin.
+
+	Checks DB `settings` table key `admin_ids` (list) and falls back/merges with
+	environment `ADMIN_IDS` from `bot.config`.
+	"""
+	from bot.config import ADMIN_IDS as ENV_ADMIN_IDS
+	# Try DB stored admin ids
+	async_session = get_session()
+	db_ids: list[int] = []
+	try:
+		async with async_session as session:
+			result = await session.execute(select(Setting).where(Setting.key == 'admin_ids'))
+			rec = result.scalar_one_or_none()
+			if rec and isinstance(rec.value, list):
+				try:
+					db_ids = [int(x) for x in rec.value]
+				except Exception:
+					db_ids = []
+	except Exception:
+		db_ids = []
+
+	merged = set(ENV_ADMIN_IDS or []) | set(db_ids or [])
+	try:
+		return int(user_identifier) in merged
+	except Exception:
+		return False
