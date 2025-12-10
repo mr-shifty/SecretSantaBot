@@ -393,7 +393,7 @@ async def cb_mark_sent(callback: CallbackQuery):
 			return
 
 		# Only the giver (by telegram_id) or admins can mark as sent
-			if user_id != giver.telegram_id and not await is_admin(user_id):
+		if user_id != giver.telegram_id and not await is_admin(user_id):
 			await callback.message.answer('❌ Вы не можете изменить статус этого назначения')
 			return
 

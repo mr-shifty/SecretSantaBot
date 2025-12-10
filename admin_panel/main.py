@@ -414,11 +414,11 @@ async def ui_delete_user(request: Request, user_id: int):
 				session.add(rec)
 				await session.commit()
 
-		_update_env_admin_ids(ids)
-		return RedirectResponse(url="/admin/users", status_code=302)
+	_update_env_admin_ids(ids)
+	return RedirectResponse(url="/admin/users", status_code=302)
 
 
-	@app.get("/users/{user_id}")
+@app.get("/users/{user_id}")
 async def get_user(user_id: int) -> UserResponse:
 	"""Get a specific user by ID."""
 	logger.info(f"API request: GET /users/{user_id}")
