@@ -19,12 +19,12 @@ async def cmd_route1(message: Message, state: FSMContext):
 	has_active = await check_active_route1_entry(message.from_user.id)
 	if has_active:
 		logger.info(f"User {message.from_user.id} attempted duplicate route1 registration")
-		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Тайный Санта (с подарками)'. Одна заявка на маршрут.")
+		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Диджитал Санта (с поздравлениями)'. Одна заявка на маршрут.")
 		return
 	
 	logger.info(f"User {message.from_user.id} started route1 registration")
 	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
-	await message.answer("🎁 Добро пожаловать в «Тайный Санта (с подарками)»!\n\nПожалуйста, введите ваш email:")
+	await message.answer("🎁 Добро пожаловать в «Диджитал Санта (с поздравлениями)»!\n\nПожалуйста, введите ваш email:")
 	await state.set_state(Route1States.email)
 
 
@@ -34,7 +34,7 @@ async def start_anketa(message: Message, state: FSMContext):
 	# Prevent starting if already in an active route1
 	has_active = await check_active_route1_entry(message.from_user.id)
 	if has_active:
-		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Тайный Санта (с подарками)'. Если хотите обновить анкету, сначала отмените старую заявку.")
+		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Диджитал Санта (с поздравлениями)'. Если хотите обновить анкету, сначала отмените старую заявку.")
 		return
 
 	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)

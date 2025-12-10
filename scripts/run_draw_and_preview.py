@@ -86,7 +86,7 @@ async def preview_notifications(route=1):
 
             text = (
                 f"🎁 Розыгрыш завершён — у вас есть получатель!\n\n"
-                f"Вы — Тайный Санта для: {recv_name}\n\n"
+                f"Вы — Диджитал Санта для: {recv_name}\n\n"
                 f"Пожелания:\n{wishlist}\n\n"
                 f"Адрес / пункт выдачи:\n{delivery}\n"
                 f"Телефон получателя: {recipient_phone}\n\n"

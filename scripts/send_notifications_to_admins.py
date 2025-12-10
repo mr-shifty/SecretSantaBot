@@ -94,7 +94,7 @@ async def main():
 
                         # Build part text with requested headers
                         if a.route_type == 1:
-                            header = "Ваш тайный санта найден\n"
+                            header = "Ваш диджитал санта найден\n"
                             part_text = (
                                 header +
                                 f"Пожелания:\n{wishlist}\n"
@@ -102,7 +102,7 @@ async def main():
                                 f"Телефон: {recipient_phone or 'Не указан'}\n"
                             )
                         else:
-                            header = f"Ваш диджитал санта найден {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
+                            header = f"Ваш тайный санта найден {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
                             part_text = (
                                 header +
                                 f"Email для поздравления: {getattr(rentry, 'email', '') or 'Не указан'}\n"
@@ -111,9 +111,9 @@ async def main():
                         parts.append(part_text)
 
                         if a.route_type == 2:
-                            buttons.append('Поздравление отправлено')
-                        else:
                             buttons.append('Подарок отправлен')
+                        else:
+                            buttons.append('Поздравление отправлено')
 
                         nlog = NotificationLog(
                             user_id=giver.id if giver else None,

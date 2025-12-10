@@ -143,7 +143,7 @@ async def cb_admin_notify(callback: CallbackQuery):
 						return str(srv)
 
 				if a.route_type == 1:
-					# For physical gift route include wishlist and address
+					# For route1 (now labelled as Диджитал in UI) include wishlist and address
 					if rentry and getattr(rentry, 'survey', None):
 						survey_obj = None
 						if isinstance(rentry.survey, (dict, list)):
@@ -169,7 +169,7 @@ async def cb_admin_notify(callback: CallbackQuery):
 						recipient_phone = getattr(rentry, 'postal_recipient_phone', None) or getattr(rentry, 'pickup_recipient_phone', None) or ''
 
 					part_text = (
-						f"Вы Тайный Санта для: {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
+						f"Вы Диджитал Санта для: {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
 						f"{wishlist}\n"
 						f"Адрес / пункт выдачи:\n{delivery}\n"
 						f"Телефон: {recipient_phone}\n"
@@ -181,7 +181,7 @@ async def cb_admin_notify(callback: CallbackQuery):
 					if rentry:
 						phone = getattr(rentry, 'postal_recipient_phone', None) or getattr(rentry, 'pickup_recipient_phone', None) or ''
 					part_text = (
-						f"Вы Диджитал Санта для: {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
+						f"Вы Тайный Санта для: {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
 						f"Email для поздравления: {email or 'Не указан'}\n"
 						f"Телефон: {phone or 'Не указан'}\n"
 					)
@@ -189,9 +189,9 @@ async def cb_admin_notify(callback: CallbackQuery):
 
 				# Determine button text for this assignment
 				if a.route_type == 2:
-					buttons.append('Поздравление отправлено')
-				else:
 					buttons.append('Подарок отправлен')
+				else:
+					buttons.append('Поздравление отправлено')
 
 				# Create a NotificationLog entry per assignment (pending)
 				nlog = NotificationLog(
@@ -214,22 +214,23 @@ async def cb_admin_notify(callback: CallbackQuery):
 			# - only route2: if single assignment include @username, else plural header
 			# - mixed: keep the Тайный Санта header
 			if has_r1 and not has_r2:
-				send_text = "Ваш тайный санта найден\n\n" + send_text
+				# only route1 present — route1 messages are now about Диджитал (UI swapped)
+				send_text = "Ваш диджитал санта найден\n\n" + send_text
 			elif has_r2 and not has_r1:
-				# only digital assignments
+				# only route2 present — route2 messages are now about Тайный
 				if len(giver_assignments) == 1:
 					first_assignment = giver_assignments[0]
 					result = await session.execute(select(User).where(User.id == first_assignment.receiver_user_id))
 					first_receiver = result.scalar_one_or_none()
 					recv_display = (('@' + first_receiver.telegram_username) if first_receiver and first_receiver.telegram_username else (first_receiver.first_name or 'Получатель'))
-					send_text = f"Ваш диджитал санта найден {recv_display}\n\n" + send_text
+					send_text = f"Ваш тайный санта найден {recv_display}\n\n" + send_text
 				else:
-					send_text = "Ваши диджитал санты найдены\n\n" + send_text
+					send_text = "Ваши тайные санты найдены\n\n" + send_text
 			else:
-				# mixed types — lead with тайный санта header
-				send_text = "Ваш тайный санта найден\n\n" + send_text
-			# Append recommendation only when route1 present
-			if has_r1:
+				# mixed types — lead with диджитал санта header (was original behavior leading with тайный)
+				send_text = "Ваш диджитал санта найден\n\n" + send_text
+			# Append recommendation only when route2 present (originally route1 had recommendation)
+			if has_r2:
 				send_text += "\nРекомендуемая сумма для подарка не более 1000 р.\n"
 
 			# Update payloads of nlogs created for this giver to include full text

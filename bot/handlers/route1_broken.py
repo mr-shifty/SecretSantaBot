@@ -21,7 +21,7 @@ async def cmd_route1(message: Message, state: FSMContext):
 	
 	logger.info(f"User {message.from_user.id} started route1 registration")
 	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
-	await message.answer("🎁 Добро пожаловать в «Тайный Санта (с подарками)»!\n\nПожалуйста, введите ваш email:")
+	await message.answer("🎁 Добро пожаловать в «Диджитал Санта (с поздравлениями)»!\n\nПожалуйста, введите ваш email:")
 	await state.set_state(Route1States.email)
 
 
