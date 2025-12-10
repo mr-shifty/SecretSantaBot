@@ -40,6 +40,9 @@ def load_settings() -> dict:
 		# how often (in minutes) the bot should check reminders and possibly send them
 		# this controls the scheduler check interval (default: 60 minutes)
 		'reminder_check_interval_minutes': 60,
+		# optional: allow finer-grained minute-based reminder thresholds
+		'assignment_reminder_minutes': None,
+		'registration_reminder_minutes': None,
 	}
 	try:
 		if os.path.exists(SETTINGS_PATH):
@@ -95,6 +98,37 @@ async def save_settings_to_db(data: dict):
 			else:
 				session.add(Setting(key=k, value=v))
 		await session.commit()
+
+
+@app.post("/admin/trigger_reminders")
+async def ui_trigger_reminders(request: Request, trigger_assignment: str | None = Form(None), trigger_registration: str | None = Form(None)):
+	"""Set a manual trigger in the DB so the bot watcher can pick it up and send reminders immediately."""
+	if not is_admin_ui(request):
+		return RedirectResponse(url="/admin")
+	assignment = bool(trigger_assignment)
+	registration = bool(trigger_registration)
+	if not (assignment or registration):
+		# nothing selected
+		return RedirectResponse(url="/admin/settings", status_code=302)
+	# upsert Setting('manual_trigger') with timestamp
+	from datetime import datetime
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(Setting).where(Setting.key == 'manual_trigger'))
+		rec = result.scalar_one_or_none()
+		payload = {
+			"assignment": assignment,
+			"registration": registration,
+			"ts": datetime.utcnow().isoformat(),
+		}
+		if rec:
+			rec.value = payload
+			session.add(rec)
+		else:
+			session.add(Setting(key='manual_trigger', value=payload))
+		await session.commit()
+
+	return RedirectResponse(url="/admin/settings", status_code=302)
 
 
 # ===== Pydantic models for request/response =====
@@ -472,7 +506,16 @@ async def ui_settings(request: Request):
 
 
 @app.post("/admin/settings")
-async def ui_settings_post(request: Request, assignment_reminder_hours: int = Form(48), registration_reminder_hours: int = Form(24), assignment_reminder_max: int = Form(3), reminder_enabled: str | None = Form(None), reminder_check_interval_minutes: int = Form(60)):
+async def ui_settings_post(
+	request: Request,
+	assignment_reminder_hours: int = Form(48),
+	registration_reminder_hours: int = Form(24),
+	assignment_reminder_max: int = Form(3),
+	reminder_enabled: str | None = Form(None),
+	reminder_check_interval_minutes: int = Form(60),
+	assignment_reminder_minutes: str | None = Form(None),
+	registration_reminder_minutes: str | None = Form(None),
+):
 	if not is_admin_ui(request):
 		return RedirectResponse(url="/admin")
 	
@@ -482,6 +525,15 @@ async def ui_settings_post(request: Request, assignment_reminder_hours: int = Fo
 		registration_reminder_hours = int(registration_reminder_hours)
 		assignment_reminder_max = int(assignment_reminder_max)
 		reminder_check_interval_minutes = int(reminder_check_interval_minutes)
+		# optional minute overrides (can be blank)
+		if assignment_reminder_minutes in (None, '', 'None'):
+			assignment_reminder_minutes = None
+		else:
+			assignment_reminder_minutes = int(assignment_reminder_minutes)
+		if registration_reminder_minutes in (None, '', 'None'):
+			registration_reminder_minutes = None
+		else:
+			registration_reminder_minutes = int(registration_reminder_minutes)
 		
 		# Проверка диапазонов
 		if not (1 <= assignment_reminder_hours <= 720):  # 1 час - 30 дней
@@ -492,6 +544,10 @@ async def ui_settings_post(request: Request, assignment_reminder_hours: int = Fo
 			raise ValueError("Максимум напоминаний должен быть между 1 и 10")
 		if not (1 <= reminder_check_interval_minutes <= 1440):
 			raise ValueError("Интервал проверки напоминаний должен быть между 1 и 1440 минут (1 день)")
+		if assignment_reminder_minutes is not None and not (1 <= assignment_reminder_minutes <= 60*24):
+			raise ValueError("Интервал напоминаний о назначении в минутах должен быть между 1 и 1440")
+		if registration_reminder_minutes is not None and not (1 <= registration_reminder_minutes <= 60*24):
+			raise ValueError("Интервал напоминаний о регистрации в минутах должен быть между 1 и 1440")
 	except (ValueError, TypeError) as e:
 		logger.warning(f"Invalid settings input: {e}")
 		# Возвращаем с ошибкой
@@ -515,6 +571,8 @@ async def ui_settings_post(request: Request, assignment_reminder_hours: int = Fo
 	settings['registration_reminder_hours'] = registration_reminder_hours
 	settings['assignment_reminder_max'] = assignment_reminder_max
 	settings['reminder_enabled'] = bool(reminder_enabled)
+	settings['assignment_reminder_minutes'] = assignment_reminder_minutes
+	settings['registration_reminder_minutes'] = registration_reminder_minutes
 	settings['reminder_check_interval_minutes'] = reminder_check_interval_minutes
 	
 	# Сохраняем в JSON для обратной совместимости

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
-from bot.db.models import Route1Entry, Route2Entry, Assignment, NotificationLog, User
+from bot.db.models import Route1Entry, Route2Entry, Assignment, NotificationLog, User, Setting
 from bot.db.database import get_session
 from bot.randomizer import perform_draw
 from bot.logger import get_logger
@@ -17,6 +17,7 @@ logger = get_logger("scheduler")
 scheduler = AsyncIOScheduler()
 # Keep track of current scheduled intervals (minutes) to avoid unnecessary reschedules
 _current_reminder_check_interval = None
+_last_manual_trigger_ts = None
 
 
 async def send_reminder_to_user(user_id: int, message_text: str):
@@ -44,13 +45,21 @@ async def send_assignment_reminders(bot=None):
 	"""Send periodic reminders to givers who haven't marked their assignment as sent."""
 	logger.info("Running send_assignment_reminders")
 	settings = await load_settings_async()
-	hours = settings.get('assignment_reminder_hours', 48)
+	# compute cutoff: prefer minute override if present
+	min_override = settings.get('assignment_reminder_minutes')
+	if min_override:
+		hours = None
+	else:
+		hours = settings.get('assignment_reminder_hours', 48)
 	enabled = settings.get('reminder_enabled', True)
 	if not enabled:
 		logger.debug('Reminders disabled in settings')
 		return
 
-	cutoff = datetime.utcnow() - timedelta(hours=hours)
+	if min_override:
+		cutoff = datetime.utcnow() - timedelta(minutes=int(min_override))
+	else:
+		cutoff = datetime.utcnow() - timedelta(hours=hours)
 	async_session = get_session()
 	async with async_session as session:
 		# find assignments not sent
@@ -125,13 +134,20 @@ async def send_registration_reminders(bot=None):
 	"""Send reminders to users who started registration but didn't complete."""
 	logger.info("Running send_registration_reminders")
 	settings = await load_settings_async()
-	hours = settings.get('registration_reminder_hours', 24)
+	min_override = settings.get('registration_reminder_minutes')
+	if min_override:
+		hours = None
+	else:
+		hours = settings.get('registration_reminder_hours', 24)
 	enabled = settings.get('reminder_enabled', True)
 	if not enabled:
 		logger.debug('Reminders disabled in settings')
 		return
 
-	cutoff = datetime.utcnow() - timedelta(hours=hours)
+	if min_override:
+		cutoff = datetime.utcnow() - timedelta(minutes=int(min_override))
+	else:
+		cutoff = datetime.utcnow() - timedelta(hours=hours)
 	async_session = get_session()
 	async with async_session as session:
 		# Find route1 pending entries
@@ -255,6 +271,43 @@ async def update_jobs_from_settings(bot=None):
 
 		_current_reminder_check_interval = n_minutes
 		logger.info(f"Scheduler reminder jobs configured to run every {n_minutes} minutes")
+
+		# Check manual trigger flag in settings: if present and newer than last processed, run immediately
+		try:
+			manual = settings.get('manual_trigger')
+			if manual and isinstance(manual, dict):
+				ts = manual.get('ts')
+				if ts:
+					try:
+						parsed = datetime.fromisoformat(ts)
+					except Exception:
+						parsed = None
+					if parsed:
+						timestamp = parsed.timestamp()
+						global _last_manual_trigger_ts
+						if _last_manual_trigger_ts is None or timestamp > _last_manual_trigger_ts:
+							_last_manual_trigger_ts = timestamp
+							# launch selected triggers
+							if manual.get('assignment'):
+								logger.info('Manual trigger: running assignment reminders now')
+								await send_assignment_reminders(bot=bot)
+							if manual.get('registration'):
+								logger.info('Manual trigger: running registration reminders now')
+								await send_registration_reminders(bot=bot)
+							# clear manual trigger to avoid re-processing (optional)
+							if scheduler.get_job('reminder_settings_watcher'):
+								# remove manual_trigger key by setting it to None in DB
+								async_session = get_session()
+								async with async_session as session:
+									result = await session.execute(select(Setting).where(Setting.key == 'manual_trigger'))
+									rec = result.scalar_one_or_none()
+									if rec:
+										rec.value = None
+										session.add(rec)
+										await session.commit()
+							
+		except Exception as exc:
+			logger.exception(f"Failed to process manual_trigger: {exc}")
 	except Exception as exc:
 		logger.exception(f"Failed to update scheduler jobs from settings: {exc}")
 
