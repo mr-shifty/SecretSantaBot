@@ -331,88 +331,88 @@ async def ui_delete_user(request: Request, user_id: int):
 	return RedirectResponse(url="/admin/users", status_code=302)
 
 
-	def _update_env_admin_ids(admin_ids: list[int]):
-		"""Update local .env file's ADMIN_IDS line (best-effort)."""
-		# project root /.env
-		env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
-		try:
-			if os.path.exists(env_path):
-				with open(env_path, 'r', encoding='utf-8') as f:
-					lines = f.readlines()
-				found = False
-				new_line = f"ADMIN_IDS={','.join(str(x) for x in admin_ids)}\n"
-				for i, l in enumerate(lines):
-					if l.strip().startswith('ADMIN_IDS='):
-						lines[i] = new_line
-						found = True
-						break
-				if not found:
-					lines.append(new_line)
-				with open(env_path, 'w', encoding='utf-8') as f:
-					f.writelines(lines)
-		except Exception:
-			# best-effort only; ignore failures
-			pass
+def _update_env_admin_ids(admin_ids: list[int]):
+	"""Update local .env file's ADMIN_IDS line (best-effort)."""
+	# project root /.env
+	env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+	try:
+		if os.path.exists(env_path):
+			with open(env_path, 'r', encoding='utf-8') as f:
+				lines = f.readlines()
+			found = False
+			new_line = f"ADMIN_IDS={','.join(str(x) for x in admin_ids)}\n"
+			for i, l in enumerate(lines):
+				if l.strip().startswith('ADMIN_IDS='):
+					lines[i] = new_line
+					found = True
+					break
+			if not found:
+				lines.append(new_line)
+			with open(env_path, 'w', encoding='utf-8') as f:
+				f.writelines(lines)
+	except Exception:
+		# best-effort only; ignore failures
+		pass
 
 
-	@app.post("/admin/users/{user_id}/make_admin")
-	async def ui_make_admin(request: Request, user_id: int):
-		if not is_admin_ui(request):
-			return RedirectResponse(url="/admin")
-		async_session = get_session()
-		async with async_session as session:
-			result = await session.execute(select(User).where(User.id == user_id))
-			user = result.scalar_one_or_none()
-			if not user or not getattr(user, 'telegram_id', None):
-				return RedirectResponse(url="/admin/users", status_code=302)
+@app.post("/admin/users/{user_id}/make_admin")
+async def ui_make_admin(request: Request, user_id: int):
+	if not is_admin_ui(request):
+		return RedirectResponse(url="/admin")
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(User).where(User.id == user_id))
+		user = result.scalar_one_or_none()
+		if not user or not getattr(user, 'telegram_id', None):
+			return RedirectResponse(url="/admin/users", status_code=302)
 
-			# load or create Setting row
-			result = await session.execute(select(Setting).where(Setting.key == 'admin_ids'))
-			rec = result.scalar_one_or_none()
-			if rec and isinstance(rec.value, list):
-				ids = [int(x) for x in rec.value]
-			else:
-				ids = []
+		# load or create Setting row
+		result = await session.execute(select(Setting).where(Setting.key == 'admin_ids'))
+		rec = result.scalar_one_or_none()
+		if rec and isinstance(rec.value, list):
+			ids = [int(x) for x in rec.value]
+		else:
+			ids = []
 
-			if int(user.telegram_id) not in ids:
-				ids.append(int(user.telegram_id))
-			# persist
-			if rec:
-				rec.value = ids
-				session.add(rec)
-			else:
-				session.add(Setting(key='admin_ids', value=ids))
+		if int(user.telegram_id) not in ids:
+			ids.append(int(user.telegram_id))
+		# persist
+		if rec:
+			rec.value = ids
+			session.add(rec)
+		else:
+			session.add(Setting(key='admin_ids', value=ids))
+		await session.commit()
+
+	# also update local .env for convenience
+	_update_env_admin_ids(ids)
+	return RedirectResponse(url="/admin/users", status_code=302)
+
+
+@app.post("/admin/users/{user_id}/remove_admin")
+async def ui_remove_admin(request: Request, user_id: int):
+	if not is_admin_ui(request):
+		return RedirectResponse(url="/admin")
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(User).where(User.id == user_id))
+		user = result.scalar_one_or_none()
+		if not user or not getattr(user, 'telegram_id', None):
+			return RedirectResponse(url="/admin/users", status_code=302)
+
+		result = await session.execute(select(Setting).where(Setting.key == 'admin_ids'))
+		rec = result.scalar_one_or_none()
+		if rec and isinstance(rec.value, list):
+			ids = [int(x) for x in rec.value]
+		else:
+			ids = []
+
+		if int(user.telegram_id) in ids:
+			ids = [x for x in ids if x != int(user.telegram_id)]
+		if rec:
+			rec.value = ids
+			session.add(rec)
 			await session.commit()
-
-		# also update local .env for convenience
-		_update_env_admin_ids(ids)
-		return RedirectResponse(url="/admin/users", status_code=302)
-
-
-	@app.post("/admin/users/{user_id}/remove_admin")
-	async def ui_remove_admin(request: Request, user_id: int):
-		if not is_admin_ui(request):
-			return RedirectResponse(url="/admin")
-		async_session = get_session()
-		async with async_session as session:
-			result = await session.execute(select(User).where(User.id == user_id))
-			user = result.scalar_one_or_none()
-			if not user or not getattr(user, 'telegram_id', None):
-				return RedirectResponse(url="/admin/users", status_code=302)
-
-			result = await session.execute(select(Setting).where(Setting.key == 'admin_ids'))
-			rec = result.scalar_one_or_none()
-			if rec and isinstance(rec.value, list):
-				ids = [int(x) for x in rec.value]
-			else:
-				ids = []
-
-			if int(user.telegram_id) in ids:
-				ids = [x for x in ids if x != int(user.telegram_id)]
-			if rec:
-				rec.value = ids
-				session.add(rec)
-				await session.commit()
 
 	_update_env_admin_ids(ids)
 	return RedirectResponse(url="/admin/users", status_code=302)
