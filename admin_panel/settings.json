@@ -1,0 +1,7 @@
+{
+  "assignment_reminder_hours": 48,
+  "assignment_reminder_max": 3,
+  "registration_reminder_hours": 24,
+  "reminder_enabled": true,
+  "reminder_check_interval_minutes": 1
+}

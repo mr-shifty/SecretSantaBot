@@ -27,6 +27,11 @@
                 <small class="d-block text-muted">При отключении все напоминания будут остановлены</small>
               </label>
             </div>
+            <div class="mt-3">
+              <label class="form-label"><strong>Проверять напоминания каждые (минут)</strong></label>
+              <input type="number" name="reminder_check_interval_minutes" class="form-control" min="1" max="1440" value="{{ settings.reminder_check_interval_minutes }}" required>
+              <small class="form-text text-muted">Интервал в минутах, с которым бот будет проверять и отправлять напоминания.</small>
+            </div>
           </div>
         </div>
 

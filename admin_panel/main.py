@@ -37,6 +37,9 @@ def load_settings() -> dict:
 		'assignment_reminder_max': 3,
 		'registration_reminder_hours': 24,
 		'reminder_enabled': True,
+		# how often (in minutes) the bot should check reminders and possibly send them
+		# this controls the scheduler check interval (default: 60 minutes)
+		'reminder_check_interval_minutes': 60,
 	}
 	try:
 		if os.path.exists(SETTINGS_PATH):
@@ -469,7 +472,7 @@ async def ui_settings(request: Request):
 
 
 @app.post("/admin/settings")
-async def ui_settings_post(request: Request, assignment_reminder_hours: int = Form(48), registration_reminder_hours: int = Form(24), assignment_reminder_max: int = Form(3), reminder_enabled: str | None = Form(None)):
+async def ui_settings_post(request: Request, assignment_reminder_hours: int = Form(48), registration_reminder_hours: int = Form(24), assignment_reminder_max: int = Form(3), reminder_enabled: str | None = Form(None), reminder_check_interval_minutes: int = Form(60)):
 	if not is_admin_ui(request):
 		return RedirectResponse(url="/admin")
 	
@@ -478,6 +481,7 @@ async def ui_settings_post(request: Request, assignment_reminder_hours: int = Fo
 		assignment_reminder_hours = int(assignment_reminder_hours)
 		registration_reminder_hours = int(registration_reminder_hours)
 		assignment_reminder_max = int(assignment_reminder_max)
+		reminder_check_interval_minutes = int(reminder_check_interval_minutes)
 		
 		# Проверка диапазонов
 		if not (1 <= assignment_reminder_hours <= 720):  # 1 час - 30 дней
@@ -486,6 +490,8 @@ async def ui_settings_post(request: Request, assignment_reminder_hours: int = Fo
 			raise ValueError("Интервал напоминаний о регистрации должен быть между 1 и 720 часами")
 		if not (1 <= assignment_reminder_max <= 10):
 			raise ValueError("Максимум напоминаний должен быть между 1 и 10")
+		if not (1 <= reminder_check_interval_minutes <= 1440):
+			raise ValueError("Интервал проверки напоминаний должен быть между 1 и 1440 минут (1 день)")
 	except (ValueError, TypeError) as e:
 		logger.warning(f"Invalid settings input: {e}")
 		# Возвращаем с ошибкой
@@ -509,6 +515,7 @@ async def ui_settings_post(request: Request, assignment_reminder_hours: int = Fo
 	settings['registration_reminder_hours'] = registration_reminder_hours
 	settings['assignment_reminder_max'] = assignment_reminder_max
 	settings['reminder_enabled'] = bool(reminder_enabled)
+	settings['reminder_check_interval_minutes'] = reminder_check_interval_minutes
 	
 	# Сохраняем в JSON для обратной совместимости
 	save_settings(settings)

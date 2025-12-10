@@ -15,6 +15,8 @@ logger = get_logger("scheduler")
 
 
 scheduler = AsyncIOScheduler()
+# Keep track of current scheduled intervals (minutes) to avoid unnecessary reschedules
+_current_reminder_check_interval = None
 
 
 async def send_reminder_to_user(user_id: int, message_text: str):
@@ -201,25 +203,60 @@ async def check_and_cancel_unpaid():
 async def start_scheduler(bot=None):
 	"""Start the async scheduler for background tasks."""
 	if not scheduler.running:
+		# Always have the daily cleanup job
 		scheduler.add_job(
 			check_and_cancel_unpaid,
 			IntervalTrigger(hours=24),  # Run every 24 hours
 			id="cancel_unpaid",
 		)
-		# assignment reminders job: run hourly and send reminders according to settings
+
+		# Initial scheduling for reminders: we will set them according to settings
+		# Use the settings watcher to (re)configure these jobs dynamically
 		scheduler.add_job(
-			send_assignment_reminders,
-			IntervalTrigger(hours=1),
-			id="assignment_reminders",
-		)
-		# registration reminders job: run hourly
-		scheduler.add_job(
-			send_registration_reminders,
-			IntervalTrigger(hours=1),
-			id="registration_reminders",
+			update_jobs_from_settings,
+			IntervalTrigger(minutes=1),
+			id="reminder_settings_watcher",
+			args=[bot]
 		)
 		scheduler.start()
-		logger.info("Background scheduler started")
+		logger.info("Background scheduler started (watcher active)")
+
+
+async def update_jobs_from_settings(bot=None):
+	"""Reload reminder-related settings from DB and (re)schedule reminder jobs.
+	This runs periodically (watcher) and will reschedule jobs only when interval changed.
+	"""
+	global _current_reminder_check_interval
+	try:
+		settings = await load_settings_async()
+		n_minutes = int(settings.get('reminder_check_interval_minutes', 60))
+		# if unchanged, nothing to do
+		if _current_reminder_check_interval == n_minutes and scheduler.get_job('assignment_reminders'):
+			return
+
+		# remove existing reminder jobs if present
+		for jid in ('assignment_reminders', 'registration_reminders'):
+			if scheduler.get_job(jid):
+				scheduler.remove_job(jid)
+
+		# schedule with new interval (in minutes)
+		scheduler.add_job(
+			send_assignment_reminders,
+			IntervalTrigger(minutes=n_minutes),
+			id='assignment_reminders',
+			args=[bot]
+		)
+		scheduler.add_job(
+			send_registration_reminders,
+			IntervalTrigger(minutes=n_minutes),
+			id='registration_reminders',
+			args=[bot]
+		)
+
+		_current_reminder_check_interval = n_minutes
+		logger.info(f"Scheduler reminder jobs configured to run every {n_minutes} minutes")
+	except Exception as exc:
+		logger.exception(f"Failed to update scheduler jobs from settings: {exc}")
 
 
 def stop_scheduler():
