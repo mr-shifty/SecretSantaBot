@@ -47,7 +47,7 @@ def reply_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     ]
 
     # Quick access to the survey for users who don't know what to write
-    rows.append([KeyboardButton(text="Анкета")])
+    # rows.append([KeyboardButton(text="Анкета")])
 
     if is_admin:
         rows.append([KeyboardButton(text="Админ")])

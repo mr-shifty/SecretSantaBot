@@ -472,18 +472,54 @@ async def ui_settings(request: Request):
 async def ui_settings_post(request: Request, assignment_reminder_hours: int = Form(48), registration_reminder_hours: int = Form(24), assignment_reminder_max: int = Form(3), reminder_enabled: str | None = Form(None)):
 	if not is_admin_ui(request):
 		return RedirectResponse(url="/admin")
+	
+	# Валидация входных данных
+	try:
+		assignment_reminder_hours = int(assignment_reminder_hours)
+		registration_reminder_hours = int(registration_reminder_hours)
+		assignment_reminder_max = int(assignment_reminder_max)
+		
+		# Проверка диапазонов
+		if not (1 <= assignment_reminder_hours <= 720):  # 1 час - 30 дней
+			raise ValueError("Интервал напоминаний о назначении должен быть между 1 и 720 часами")
+		if not (1 <= registration_reminder_hours <= 720):  # 1 час - 30 дней
+			raise ValueError("Интервал напоминаний о регистрации должен быть между 1 и 720 часами")
+		if not (1 <= assignment_reminder_max <= 10):
+			raise ValueError("Максимум напоминаний должен быть между 1 и 10")
+	except (ValueError, TypeError) as e:
+		logger.warning(f"Invalid settings input: {e}")
+		# Возвращаем с ошибкой
+		settings = await load_settings_async()
+		return templates.TemplateResponse(
+			"edit_settings.html",
+			{
+				"request": request,
+				"settings": settings,
+				"error": str(e)
+			},
+			status_code=400
+		)
+	
+	# Загружаем текущие настройки
 	settings = await load_settings_async()
-	settings['assignment_reminder_hours'] = int(assignment_reminder_hours)
-	settings['registration_reminder_hours'] = int(registration_reminder_hours)
-	settings['assignment_reminder_max'] = int(assignment_reminder_max)
+	
+	# Обновляем значения
+	old_settings = settings.copy()
+	settings['assignment_reminder_hours'] = assignment_reminder_hours
+	settings['registration_reminder_hours'] = registration_reminder_hours
+	settings['assignment_reminder_max'] = assignment_reminder_max
 	settings['reminder_enabled'] = bool(reminder_enabled)
-	# Save to JSON file for backward compatibility
+	
+	# Сохраняем в JSON для обратной совместимости
 	save_settings(settings)
-	# Also persist to DB asynchronously
+	
+	# Сохраняем в БД асинхронно
 	try:
 		await save_settings_to_db(settings)
-	except Exception:
+		logger.info(f"Settings updated successfully: {settings}")
+	except Exception as e:
 		logger.exception("Failed to save settings to DB; falling back to JSON only")
+	
 	return RedirectResponse(url="/admin/settings", status_code=302)
 
 
