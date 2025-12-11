@@ -8,6 +8,7 @@ from bot.db.database import init_db
 from bot.handlers import register_all
 from bot.scheduler import start_scheduler, stop_scheduler
 from bot.logger import setup_logging, get_logger
+from bot.internal_api import start_server, stop_server
 
 logger = get_logger("main")
 
@@ -29,6 +30,8 @@ async def main():
 	logger.info("Handlers registered")
 
 	# start background scheduler
+	# start internal HTTP API for admin-trigger (non-blocking)
+	_internal_api_task = asyncio.create_task(start_server(bot))
 	await start_scheduler(bot)
 	logger.info("Background scheduler started")
 
@@ -40,6 +43,11 @@ async def main():
 		raise
 	finally:
 		stop_scheduler()
+		# stop internal API if running
+		try:
+			await stop_server()
+		except Exception:
+			pass
 		await bot.session.close()
 		logger.info("Bot stopped")
 

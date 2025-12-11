@@ -68,4 +68,7 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Files
+cookies.txt
+
 artifacts/

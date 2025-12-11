@@ -118,17 +118,96 @@
               <small class="form-text text-muted">
                 Как часто отправлять напоминание о необходимости зарегистрироваться
               </small>
-            </div>
+
             <div class="mb-3">
-              <label class="form-label"><strong>ИЛИ интервал регистрации в минутах</strong></label>
+              <label class="form-label">
+                <strong>ИЛИ интервал в минутах (перекрывает часы)</strong>
+              </label>
               <div class="input-group">
                 <input class="form-control" type="number" name="registration_reminder_minutes" value="{{ settings.registration_reminder_minutes or '' }}" min="1" max="1440">
                 <span class="input-group-text">минут</span>
               </div>
               <small class="form-text text-muted">Если указан, будет использован вместо `registration_reminder_hours`.</small>
             </div>
+            <!-- </div>
+            <div class=\"mb-3\">
+              <label class=\"form-label\"><strong>ИЛИ интервал регистрации в минутах (перекрывает часы)</strong></label>
+              <div class=\"input-group\">
+                <input class=\"form-control\" type=\"number\" name=\"registration_reminder_minutes\" value=\"{{ settings.registration_reminder_minutes or '' }}\" min=\"1\" max=\"1440\">
+                <span class=\"input-group-text\">минут</span>
+              </div>
+              <small class=\"form-text text-muted\">Если указан, будет использован вместо `registration_reminder_hours`.</small>
+            </div> -->
           </div>
         </div>
+
+        <script>
+          (function() {
+            const regMinInput = document.querySelector('input[name="registration_reminder_minutes"]');
+            const regHoursInput = document.querySelector('input[name="registration_reminder_hours"]');
+            const assignMinInput = document.querySelector('input[name="assignment_reminder_minutes"]');
+            const assignHoursInput = document.querySelector('input[name="assignment_reminder_hours"]');
+
+            // Убираем случайные кавычки, которые иногда попадают в значение из формы
+            function normalizeQuotedValue(inp) {
+              if (!inp) return;
+              const v = inp.value?.trim();
+              if (!v) return;
+              if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+                inp.value = v.slice(1, -1);
+              }
+            }
+
+            function disableFieldHours(hoursInput) {
+              if (!hoursInput) return;
+              // Сохраним текущее значение, чтобы восстановить при включении
+              if (!hoursInput.dataset.prevValue) hoursInput.dataset.prevValue = hoursInput.value || '';
+              hoursInput.value = hoursInput.dataset.prevValue || '';
+              hoursInput.disabled = true;
+              hoursInput.required = false;
+              hoursInput.style.opacity = '0.5';
+              hoursInput.title = 'Отключено: используются минуты';
+            }
+
+            function enableFieldHours(hoursInput) {
+              if (!hoursInput) return;
+              // Восстанавливаем предыдущее значение, если было
+              if (hoursInput.dataset.prevValue) hoursInput.value = hoursInput.dataset.prevValue;
+              hoursInput.disabled = false;
+              hoursInput.required = true;
+              hoursInput.style.opacity = '1';
+              hoursInput.title = '';
+            }
+
+            function updateFieldStates() {
+              // Нормализуем кавычки при загрузке/вводе
+              normalizeQuotedValue(regMinInput);
+              normalizeQuotedValue(assignMinInput);
+
+              if (regMinInput && regMinInput.value && regMinInput.value.trim() !== '') {
+                disableFieldHours(regHoursInput);
+              } else {
+                enableFieldHours(regHoursInput);
+              }
+
+              if (assignMinInput && assignMinInput.value && assignMinInput.value.trim() !== '') {
+                disableFieldHours(assignHoursInput);
+              } else {
+                enableFieldHours(assignHoursInput);
+              }
+            }
+
+            if (regMinInput) regMinInput.addEventListener('input', updateFieldStates);
+            if (assignMinInput) assignMinInput.addEventListener('input', updateFieldStates);
+
+            // Also normalize on paste/change to handle values inserted programmatically
+            if (regMinInput) regMinInput.addEventListener('change', updateFieldStates);
+            if (assignMinInput) assignMinInput.addEventListener('change', updateFieldStates);
+
+            // Initial run
+            updateFieldStates();
+          })();
+        </script>
 
         <!-- Кнопки действий -->
         <div class="d-flex gap-2">
@@ -162,6 +241,43 @@
           </div>
         </div>
       </form>
+ 
+        <!-- Результат ручного триггера -->
+        {% if trigger_result is defined and trigger_result %}
+        <div class="mt-3">
+          {% if trigger_result.error %}
+          <div class="alert alert-danger">
+            <strong>Ошибка при вызове бота:</strong>
+            <pre class="small">{{ trigger_result | tojson(indent=2) }}</pre>
+          </div>
+          {% else %}
+          <div class="alert alert-success">
+            <strong>Ручный триггер выполнен:</strong>
+            <div class="small">
+              <ul>
+                <li>Отправлено напоминаний о назначении: <strong>{{ trigger_result.assignment_sent }}</strong></li>
+                <li>Отправлено напоминаний о регистрации: <strong>{{ trigger_result.registration_sent }}</strong></li>
+              </ul>
+            </div>
+          </div>
+          {% endif %}
+          <!-- История ручных триггеров -->
+          {% if settings.manual_trigger_history %}
+          <div class="card mt-3">
+            <div class="card-header bg-light"><strong>История ручных триггеров</strong></div>
+            <div class="card-body small">
+              <ul class="mb-0">
+                {% for h in settings.manual_trigger_history|reverse %}
+                  <li>
+                    <code>{{ h.ts }}</code> — {% if h.error %}<span class="text-danger">Ошибка: {{ h.error }}</span>{% else %}assignment: <strong>{{ h.assignment_sent or 0 }}</strong>, registration: <strong>{{ h.registration_sent or 0 }}</strong>{% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
       <!-- Справка -->
       <div class="alert alert-info mt-4">
         <h6 class="alert-heading">💡 Справка</h6>

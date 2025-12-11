@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select
+from sqlalchemy import select, exists
 from bot.db.models import Route1Entry, Route2Entry, Assignment, NotificationLog, User, Setting
 from bot.db.database import get_session
 from bot.randomizer import perform_draw
@@ -42,7 +42,10 @@ async def check_reminders():
 
 
 async def send_assignment_reminders(bot=None):
-	"""Send periodic reminders to givers who haven't marked their assignment as sent."""
+	"""Send periodic reminders to givers who haven't marked their assignment as sent.
+
+	Returns number of reminders successfully sent (notification log entries marked 'sent').
+	"""
 	logger.info("Running send_assignment_reminders")
 	settings = await load_settings_async()
 	# compute cutoff: prefer minute override if present
@@ -54,7 +57,7 @@ async def send_assignment_reminders(bot=None):
 	enabled = settings.get('reminder_enabled', True)
 	if not enabled:
 		logger.debug('Reminders disabled in settings')
-		return
+		return 0
 
 	if min_override:
 		cutoff = datetime.utcnow() - timedelta(minutes=int(min_override))
@@ -72,17 +75,32 @@ async def send_assignment_reminders(bot=None):
 			if a.assigned_at and a.assigned_at <= cutoff:
 				by_giver.setdefault(a.giver_user_id, []).append(a)
 
+		total_sent = 0
 		for giver_id, lst in by_giver.items():
 			result = await session.execute(select(User).where(User.id == giver_id))
 			giver = result.scalar_one_or_none()
 			if not giver or not giver.telegram_id:
 				continue
 
-			# check last reminder for this giver: if we already sent reminder within hours, skip
-			result = await session.execute(select(NotificationLog).where(NotificationLog.user_id == giver.id).where(NotificationLog.notif_type == 'assignment_reminder').order_by(NotificationLog.sent_at.desc()))
+			# check last reminder for this giver: if we already sent reminder within configured window, skip
+			result = await session.execute(
+				select(NotificationLog)
+				.where(NotificationLog.user_id == giver.id)
+				.where(NotificationLog.notif_type == 'assignment_reminder')
+				.order_by(NotificationLog.sent_at.desc())
+			)
 			last = result.scalars().first()
-			if last and last.sent_at and last.sent_at > (datetime.utcnow() - timedelta(hours=hours)):
-				continue
+			# determine recent window: use minutes override if present, otherwise hours
+			if last and last.sent_at:
+				try:
+					if min_override:
+						recent_window = timedelta(minutes=int(min_override))
+					else:
+						recent_window = timedelta(hours=int(hours))
+				except Exception:
+					recent_window = None
+				if recent_window and last.sent_at > (datetime.utcnow() - recent_window):
+					continue
 			# Respect maximum number of reminders sent overall
 			max_reminders = settings.get('assignment_reminder_max', 3)
 			result = await session.execute(select(NotificationLog).where(NotificationLog.user_id == giver.id).where(NotificationLog.notif_type == 'assignment_reminder').where(NotificationLog.status == 'sent'))
@@ -101,7 +119,8 @@ async def send_assignment_reminders(bot=None):
 				receiver = result.scalar_one_or_none()
 				recv_name = (('@' + receiver.telegram_username) if receiver and receiver.telegram_username else (receiver.first_name or 'Получатель'))
 				# minimal info
-				parts.append(f"Маршрут {a.route_type} — Для: {recv_name}")
+				route_label = 'Тайный Санта' if a.route_type == 1 else ('Диджитал Санта' if a.route_type == 2 else f'Маршрут {a.route_type}')
+				parts.append(f"{route_label} — Для: {recv_name}")
 				buttons.append(InlineKeyboardButton(text=( 'Поздравление отправлено' if a.route_type==2 else 'Подарок отправлен'), callback_data=f"mark_sent:{a.id}"))
 				nl = NotificationLog(user_id=giver.id, channel='telegram', notif_type='assignment_reminder', payload=None, status='pending')
 				session.add(nl)
@@ -122,6 +141,7 @@ async def send_assignment_reminders(bot=None):
 					nl.sent_at = datetime.utcnow()
 					session.add(nl)
 				await session.commit()
+				total_sent += len(nlogs)
 			except Exception as exc:
 				logger.exception(f"Failed to send assignment reminder to {giver_id}: {exc}")
 				for nl in nlogs:
@@ -129,60 +149,116 @@ async def send_assignment_reminders(bot=None):
 					session.add(nl)
 				await session.commit()
 
+		return total_sent
 
-async def send_registration_reminders(bot=None):
+
+async def send_registration_reminders(bot=None, force: bool = False):
 	"""Send reminders to users who started registration but didn't complete."""
 	logger.info("Running send_registration_reminders")
 	settings = await load_settings_async()
 	min_override = settings.get('registration_reminder_minutes')
-	if min_override:
-		hours = None
-	else:
-		hours = settings.get('registration_reminder_hours', 24)
+	hours = settings.get('registration_reminder_hours', 24)
 	enabled = settings.get('reminder_enabled', True)
 	if not enabled:
 		logger.debug('Reminders disabled in settings')
-		return
+		return 0
 
-	if min_override:
-		cutoff = datetime.utcnow() - timedelta(minutes=int(min_override))
+	# Determine the interval window to use: prefer minute override if present
+	interval_minutes = min_override if min_override else (hours * 60 if hours else 24*60)
+	interval_minutes = int(interval_minutes)
+	
+	logger.info(f"Registration reminders: min_override={min_override}, hours={hours}, using interval={interval_minutes} minutes")
+
+	# compute cutoff (unless forced)
+	if not force:
+		cutoff = datetime.utcnow() - timedelta(minutes=interval_minutes)
 	else:
-		cutoff = datetime.utcnow() - timedelta(hours=hours)
+		# when forced (manual trigger) we don't enforce a time cutoff — consider all users
+		cutoff = None
 	async_session = get_session()
 	async with async_session as session:
 		# Find route1 pending entries
-		result = await session.execute(select(Route1Entry).where(Route1Entry.status != 'completed').where(Route1Entry.started_at <= cutoff))
+		if cutoff is not None:
+			result = await session.execute(select(Route1Entry).where(Route1Entry.status != 'completed').where(Route1Entry.started_at <= cutoff))
+		else:
+			result = await session.execute(select(Route1Entry).where(Route1Entry.status != 'completed'))
 		r1_entries = result.scalars().all()
-		# route2
-		result = await session.execute(select(Route2Entry).where(Route2Entry.status != 'completed').where(Route2Entry.started_at <= cutoff))
+		logger.debug(f"Found {len(r1_entries)} pending route1 entries with started_at <= {cutoff}")
+		# route2 pending entries
+		if cutoff is not None:
+			result = await session.execute(select(Route2Entry).where(Route2Entry.status != 'completed').where(Route2Entry.started_at <= cutoff))
+		else:
+			result = await session.execute(select(Route2Entry).where(Route2Entry.status != 'completed'))
 		r2_entries = result.scalars().all()
+		logger.debug(f"Found {len(r2_entries)} pending route2 entries with started_at <= {cutoff}")
 
-		# send reminders individually
+		# Find users who have NO entries in either route
+		# Users without any entries should get reminders regardless of when they were created
+		# (they haven't started registration yet, so they're all candidates for reminder)
+		q = select(User).where(~exists().where(Route1Entry.user_id == User.id)).where(~exists().where(Route2Entry.user_id == User.id))
+		result = await session.execute(q)
+		users_without_entries = result.scalars().all()
+		logger.debug(f"Found {len(users_without_entries)} users without any route entries")
+
+		# send reminders individually for both sets
+		total_sent = 0
+		candidates = []
+		# build unified candidate list: users from pending entries
 		for e in r1_entries + r2_entries:
-			result = await session.execute(select(User).where(User.id == e.user_id))
+			candidates.append((e.user_id, 'entry'))
+		# and users with no entries
+		for u in users_without_entries:
+			candidates.append((u.id, 'no_entry'))
+
+		# deduplicate by user id preserving order
+		seen = set()
+		unique_candidates = []
+		for uid, kind in candidates:
+			if uid in seen:
+				continue
+			seen.add(uid)
+			unique_candidates.append(uid)
+
+		for user_id in unique_candidates:
+			result = await session.execute(select(User).where(User.id == user_id))
 			user = result.scalar_one_or_none()
 			if not user or not user.telegram_id:
 				continue
 			# check last registration reminder
-			result = await session.execute(select(NotificationLog).where(NotificationLog.user_id == user.id).where(NotificationLog.notif_type == 'registration_reminder').order_by(NotificationLog.sent_at.desc()))
+			result = await session.execute(
+				select(NotificationLog)
+				.where(NotificationLog.user_id == user.id)
+				.where(NotificationLog.notif_type == 'registration_reminder')
+				.order_by(NotificationLog.sent_at.desc())
+			)
 			last = result.scalars().first()
-			if last and last.sent_at and last.sent_at > (datetime.utcnow() - timedelta(hours=hours)):
-				continue
+			# Always check if we've sent a reminder recently (to respect the configured interval)
+			if last and last.sent_at:
+				# Use the same interval window as computed above
+				recent_window = timedelta(minutes=interval_minutes)
+				
+				# If force=True (manual), ignore recent-window to allow immediate spam
+				# If force=False (schedule), respect the window to avoid duplicate sends
+				if not force and last.sent_at > (datetime.utcnow() - recent_window):
+					logger.info(f"Skipping user {user.id}: last reminder was {(datetime.utcnow() - last.sent_at).total_seconds():.0f} secs ago, window is {interval_minutes} minutes")
+					continue
 
 			text = 'Напоминание: пожалуйста, завершите вашу регистрацию. Отправьте /start в боте и выберите нужный маршрут.'
 			nlog = NotificationLog(user_id=user.id, channel='telegram', notif_type='registration_reminder', payload=text, status='pending')
 			session.add(nlog)
 			await session.commit()
 			try:
+				logger.info(f"Sending registration reminder to user.id={user.id}, telegram_id={getattr(user,'telegram_id', None)}")
 				await bot.send_message(chat_id=user.telegram_id, text=text)
 				nlog.status = 'sent'
 				nlog.sent_at = datetime.utcnow()
-			except Exception:
+				total_sent += 1
+			except Exception as exc:
+				logger.exception(f"Failed to send registration reminder to user.id={user.id}, telegram_id={getattr(user,'telegram_id', None)}: {exc}")
 				nlog.status = 'failed'
 			session.add(nlog)
 			await session.commit()
-
-
+		return total_sent if total_sent else 0
 async def check_and_cancel_unpaid():
 	"""Auto-cancel assignments that haven't been marked as sent after 7 days."""
 	logger.info("Running check_and_cancel_unpaid task")
@@ -293,7 +369,8 @@ async def update_jobs_from_settings(bot=None):
 								await send_assignment_reminders(bot=bot)
 							if manual.get('registration'):
 								logger.info('Manual trigger: running registration reminders now')
-								await send_registration_reminders(bot=bot)
+								# For manual triggers via DB, force bypass cutoff
+								await send_registration_reminders(bot=bot, force=True)
 							# clear manual trigger to avoid re-processing (optional)
 							if scheduler.get_job('reminder_settings_watcher'):
 								# remove manual_trigger key by setting it to None in DB

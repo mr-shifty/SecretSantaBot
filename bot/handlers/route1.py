@@ -4,6 +4,9 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from bot.states import Route1States
 from bot.utils import get_or_create_user, is_valid_email, save_route1_entry, check_active_route1_entry
+from sqlalchemy import select
+from bot.db.database import get_session
+from bot.db.models import Route1Entry
 from bot.logger import get_logger
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from bot.keyboards import reply_menu
@@ -19,12 +22,12 @@ async def cmd_route1(message: Message, state: FSMContext):
 	has_active = await check_active_route1_entry(message.from_user.id)
 	if has_active:
 		logger.info(f"User {message.from_user.id} attempted duplicate route1 registration")
-		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Диджитал Санта (с поздравлениями)'. Одна заявка на маршрут.")
+		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Тайный Санта (с подарками)'. Одна заявка на маршрут.")
 		return
 	
 	logger.info(f"User {message.from_user.id} started route1 registration")
 	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
-	await message.answer("🎁 Добро пожаловать в «Диджитал Санта (с поздравлениями)»!\n\nПожалуйста, введите ваш email:")
+	await message.answer("🎁 Добро пожаловать в «Тайный Санта (с подарками)»!\n\nПожалуйста, введите ваш email:")
 	await state.set_state(Route1States.email)
 
 
@@ -34,12 +37,63 @@ async def start_anketa(message: Message, state: FSMContext):
 	# Prevent starting if already in an active route1
 	has_active = await check_active_route1_entry(message.from_user.id)
 	if has_active:
-		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Диджитал Санта (с поздравлениями)'. Если хотите обновить анкету, сначала отмените старую заявку.")
+		await message.answer("⚠️ У вас уже есть активная заявка для маршрута 'Тайный Санта (с подарками)'. Если хотите обновить анкету, сначала отмените старую заявку.")
 		return
 
-	await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
+	# Ensure user exists and try to prefill from last route1 entry if present
+	user = await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
+	# Try to find the most recent route1 entry for this user
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(Route1Entry).where(Route1Entry.user_id == user.id).order_by(Route1Entry.started_at.desc()))
+		last_entry = result.scalars().first()
+
 	# mark that this flow is survey-only
 	await state.update_data(survey_only=True)
+
+	# First check FSM state: if user already provided email/phone in current flow, prefer that
+	data = await state.get_data()
+	has_email_in_state = bool(data.get('email'))
+	has_phone_in_state = bool(data.get('phone'))
+	# Also consider phone stored on User profile
+	user_phone_on_profile = getattr(user, 'phone', None)
+
+	# If we already have phone from FSM or user profile, go straight to survey
+	if has_phone_in_state or user_phone_on_profile:
+		await message.answer("Вы начали заполнение анкеты Тайного Санты. Продолжим с вопросов анкеты:")
+		kb = InlineKeyboardMarkup(inline_keyboard=[
+			[InlineKeyboardButton(text="Красный", callback_data="s1:Красный"), InlineKeyboardButton(text="Синий", callback_data="s1:Синий")],
+			[InlineKeyboardButton(text="Зеленый", callback_data="s1:Зеленый"), InlineKeyboardButton(text="Другое", callback_data="s1:other")],
+		])
+		await message.answer("1) Какой ваш любимый цвет? Выберите вариант или напишите свой:", reply_markup=kb)
+		await state.set_state(Route1States.survey_q1)
+		return
+
+	# If FSM has email but phone missing -> ask for phone
+	if has_email_in_state and not (has_phone_in_state or user_phone_on_profile):
+		await message.answer("Вы начали заполнение анкеты Тайного Санты. Сначала укажите ваш телефон:")
+		await state.set_state(Route1States.phone)
+		return
+
+	# If FSM has no email, but there is a last saved entry, prefill from it and either ask phone or jump to survey
+	if last_entry:
+		await state.update_data(email=last_entry.email, phone=(last_entry.postal_recipient_phone or getattr(user, 'phone', None)), pickup_type=last_entry.pickup_type)
+		# If we have phone from last entry, go to survey questions
+		if (last_entry.postal_recipient_phone or getattr(user, 'phone', None)):
+			await message.answer("Вы начали заполнение анкеты Тайного Санты. Продолжим с вопросов анкеты:")
+			kb = InlineKeyboardMarkup(inline_keyboard=[
+				[InlineKeyboardButton(text="Красный", callback_data="s1:Красный"), InlineKeyboardButton(text="Синий", callback_data="s1:Синий")],
+				[InlineKeyboardButton(text="Зеленый", callback_data="s1:Зеленый"), InlineKeyboardButton(text="Другое", callback_data="s1:other")],
+			])
+			await message.answer("1) Какой ваш любимый цвет? Выберите вариант или напишите свой:", reply_markup=kb)
+			await state.set_state(Route1States.survey_q1)
+			return
+		# Otherwise ask for email -> but we already set email from last_entry, so ask for phone
+		await message.answer("Вы начали заполнение анкеты Тайного Санты. Пожалуйста, подтвердите или введите ваш телефон:")
+		await state.set_state(Route1States.phone)
+		return
+
+	# No existing contact info anywhere — ask email first
 	await message.answer("Вы начали заполнение анкеты Тайного Санты. Сначала укажите ваш email:")
 	await state.set_state(Route1States.email)
 
