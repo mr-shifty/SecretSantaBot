@@ -643,8 +643,9 @@ async def ui_settings_post(
 			raise ValueError("Интервал напоминаний о назначении должен быть между 1 и 720 часами")
 		if not (1 <= registration_reminder_hours <= 720):  # 1 час - 30 дней
 			raise ValueError("Интервал напоминаний о регистрации должен быть между 1 и 720 часами")
-		if not (1 <= assignment_reminder_max <= 10):
-			raise ValueError("Максимум напоминаний должен быть между 1 и 10")
+		# if not (1 <= assignment_reminder_max <= 10):
+		if not (1 <= assignment_reminder_max <= 999):
+			raise ValueError("Максимум напоминаний должен быть между 1 и 999")
 		if not (1 <= reminder_check_interval_minutes <= 1440):
 			raise ValueError("Интервал проверки напоминаний должен быть между 1 и 1440 минут (1 день)")
 		if assignment_reminder_minutes is not None and not (1 <= assignment_reminder_minutes <= 60*24):

@@ -8,6 +8,7 @@ from bot.db.database import get_session, init_db
 from bot.db.models import Assignment, User, Route1Entry, NotificationLog
 from sqlalchemy import select
 from bot.logger import get_logger
+from bot.notifications import build_assignment_notification
 
 logger = get_logger("send_notifications")
 
@@ -51,70 +52,10 @@ async def main():
                         logger.warning(f"No giver user found for giver_id {giver_id}")
                         continue
 
-                    parts = []
-                    buttons = []
+                    # Use shared helper to build send_text and button labels
+                    send_text, buttons = await build_assignment_notification(session, giver_assignments)
                     nlogs_created = []
                     for a in giver_assignments:
-                        result = await session.execute(select(User).where(User.id == a.receiver_user_id))
-                        receiver = result.scalar_one_or_none()
-                        result = await session.execute(
-                            select(Route1Entry).where(Route1Entry.user_id == a.receiver_user_id).where(Route1Entry.status == 'completed')
-                        ) if a.route_type == 1 else await session.execute(
-                            select(Route2Entry).where(Route2Entry.user_id == a.receiver_user_id).where(Route2Entry.status == 'completed')
-                        )
-                        rentry = result.scalar_one_or_none()
-
-                        recv_name = receiver.telegram_username or f"{receiver.first_name or ''} {receiver.last_name or ''}" if receiver else 'Получатель'
-                        if rentry and getattr(rentry, 'survey', None):
-                            survey_obj = None
-                            if isinstance(rentry.survey, (dict, list)):
-                                survey_obj = rentry.survey
-                            else:
-                                try:
-                                    survey_obj = json.loads(rentry.survey)
-                                except Exception:
-                                    survey_obj = None
-
-                            if survey_obj is not None:
-                                try:
-                                    wishlist = "Анкета:\n" + "\n".join([f"{k}: {v}" for k, v in survey_obj.items()])
-                                except Exception:
-                                    wishlist = str(survey_obj)
-                            else:
-                                wishlist = rentry.survey
-                        else:
-                            wishlist = (rentry.wishlist if rentry and getattr(rentry, 'wishlist', None) else 'Пожелания отсутствуют')
-
-                        delivery = rentry.full_address if (rentry and getattr(rentry, 'full_address', None)) else ''
-                        if not delivery and rentry and getattr(rentry, 'pickup_company', None):
-                            delivery = f"Пункт выдачи: {rentry.pickup_company}, {getattr(rentry, 'pickup_address', '') or ''}"
-                        recipient_phone = ''
-                        if rentry:
-                            recipient_phone = getattr(rentry, 'postal_recipient_phone', None) or getattr(rentry, 'pickup_recipient_phone', None) or ''
-
-                        # Build part text with requested headers
-                        if a.route_type == 1:
-                            header = "Ваш диджитал санта найден\n"
-                            part_text = (
-                                header +
-                                f"Пожелания:\n{wishlist}\n"
-                                f"Адрес / пункт выдачи:\n{delivery}\n"
-                                f"Телефон: {recipient_phone or 'Не указан'}\n"
-                            )
-                        else:
-                            header = f"Ваш тайный санта найден {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
-                            part_text = (
-                                header +
-                                f"Email для поздравления: {getattr(rentry, 'email', '') or 'Не указан'}\n"
-                                f"Телефон: {recipient_phone or 'Не указан'}\n"
-                            )
-                        parts.append(part_text)
-
-                        if a.route_type == 2:
-                            buttons.append('Подарок отправлен')
-                        else:
-                            buttons.append('Поздравление отправлено')
-
                         nlog = NotificationLog(
                             user_id=giver.id if giver else None,
                             channel='telegram',
@@ -126,7 +67,6 @@ async def main():
                         await session.commit()
                         nlogs_created.append(nlog)
 
-                    send_text = "🎁 Розыгрыш завершён — у вас есть получатели!\n\n" + "\n---\n".join(parts)
                     for nl in nlogs_created:
                         nl.payload = send_text
                         session.add(nl)
@@ -147,7 +87,7 @@ async def main():
                         ikb.inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"mark_sent:{a.id}")])
 
                     try:
-                        await bot.send_message(chat_id=giver.telegram_id, text=send_text, reply_markup=ikb)
+                        await bot.send_message(chat_id=giver.telegram_id, text=send_text, reply_markup=ikb, parse_mode="HTML")
                         for nl in nlogs_created:
                             nl.status = 'sent'
                             nl.sent_at = datetime.utcnow()
