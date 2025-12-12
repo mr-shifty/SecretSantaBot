@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from bot.keyboards import reply_menu
-from bot.config import ADMIN_IDS
+from bot.utils import is_admin
 
 logger = get_logger("route2")
 router = Router()
@@ -66,12 +66,12 @@ async def process_phone(message: Message, state: FSMContext):
 	logger.info(f"User {message.from_user.id} submitting route2 entry: email={email}")
 	await save_route2_entry(message.from_user.id, email, phone=phone, notify_date=notify_date)
 	
-	is_admin = message.from_user.id in ADMIN_IDS
+	is_admin_flag = await is_admin(message.from_user.id)
 	await message.answer(
 		"✅ Спасибо! Ваша регистрация в Диджитал Санте успешно сохранена.\n\n"
 		"21 декабря вы получите email своего Диджитал Санты. "
 		"После этого вы сможете отправить открытку/поздравление вашему получателю! 🎄",
-		reply_markup=reply_menu(is_admin=is_admin)
+		reply_markup=reply_menu(is_admin=is_admin_flag)
 	)
 	await state.clear()
 

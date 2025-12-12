@@ -2,17 +2,33 @@
 {% block content %}
 <h3>Пользователи</h3>
 <table class="table table-sm">
-<thead><tr><th>ID</th><th>Telegram ID</th><th>Имя</th><th>Телефон</th><th>Действия</th></tr></thead>
+<thead><tr><th>ID</th><th>Telegram ID</th><th>Имя</th><th>Админ</th><th>Телефон</th><th>Действия</th></tr></thead>
 <tbody>
 {% for u in users %}
 <tr>
   <td>{{ u.id }}</td>
   <!-- <td>{{ u.telegram_id }}</td> -->
-  <td>{{ u.telegram_username }}</td>
+  <td>{{ u.telegram_id or '' }}</td>
   <td>{{ u.first_name }} {{ u.last_name }} (@{{ u.telegram_username }})</td>
+  <td>
+    {% if admin_ids and (u.telegram_id in admin_ids) %}
+      <span class="badge bg-success">Admin</span>
+    {% else %}
+      <span class="badge bg-secondary">User</span>
+    {% endif %}
+  </td>
   <td>{{ u.phone or '' }}</td>
   <td>
     <a href="/admin/users/{{ u.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
+    {% if admin_ids and (u.telegram_id in admin_ids) %}
+      <form method="post" action="/admin/users/{{ u.id }}/remove_admin" style="display:inline; margin-left:6px;">
+        <button class="btn btn-sm btn-warning" type="submit">Revoke Admin</button>
+      </form>
+    {% else %}
+      <form method="post" action="/admin/users/{{ u.id }}/make_admin" style="display:inline; margin-left:6px;">
+        <button class="btn btn-sm btn-primary" type="submit">Make Admin</button>
+      </form>
+    {% endif %}
     <form method="post" action="/admin/users/{{ u.id }}/delete" style="display:inline; margin-left:6px;">
       <button class="btn btn-sm btn-danger" type="submit" onclick="return confirm('Удалить пользователя? Это действие необратимо.')">Delete</button>
     </form>

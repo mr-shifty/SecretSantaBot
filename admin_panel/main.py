@@ -13,6 +13,11 @@ from bot.db.models import User, Route1Entry, Route2Entry, Assignment, Notificati
 from bot.randomizer import perform_draw
 from bot.logger import get_logger
 import json
+import re
+import aiohttp
+import os
+BOT_INTERNAL_URL = os.getenv('BOT_INTERNAL_URL', 'http://bot:9000/internal/trigger_reminders')
+BOT_INTERNAL_SECRET = os.getenv('BOT_INTERNAL_SECRET')
 
 logger = get_logger("admin_panel")
 app = FastAPI(title="Secret Santa Admin Panel", version="1.0.0")
@@ -37,12 +42,30 @@ def load_settings() -> dict:
 		'assignment_reminder_max': 3,
 		'registration_reminder_hours': 24,
 		'reminder_enabled': True,
+		# how often (in minutes) the bot should check reminders and possibly send them
+		# this controls the scheduler check interval (default: 60 minutes)
+		'reminder_check_interval_minutes': 60,
+		# optional: allow finer-grained minute-based reminder thresholds
+		'assignment_reminder_minutes': None,
+		'registration_reminder_minutes': None,
 	}
 	try:
 		if os.path.exists(SETTINGS_PATH):
 			with open(SETTINGS_PATH, 'r', encoding='utf-8') as f:
 				data = json.load(f)
 				defaults.update(data)
+				# Normalize minute-like settings coming from JSON file
+				for k, v in list(defaults.items()):
+					if k.endswith('_minutes') and isinstance(v, str):
+						# strip non-digits
+						clean = re.sub(r"[^0-9]", "", v)
+						if clean == '':
+							defaults[k] = None
+						else:
+							try:
+								defaults[k] = int(clean)
+							except Exception:
+								defaults[k] = None
 	except Exception:
 		pass
 	return defaults
@@ -61,7 +84,20 @@ async def load_settings_async() -> dict:
 			for r in rows:
 				# Setting.value is stored as JSON-serializable object; merge
 				try:
-					settings[r.key] = r.value
+					val = r.value
+					# Normalize minute-like settings that may have ended up quoted or escaped
+					if r.key and r.key.endswith('_minutes') and isinstance(val, str):
+						# remove surrounding quotes and any backslashes, keep digits only
+						clean = re.sub(r"[^0-9]", "", val)
+						if clean == '':
+							settings[r.key] = None
+						else:
+							try:
+								settings[r.key] = int(clean)
+							except Exception:
+								settings[r.key] = None
+					else:
+						settings[r.key] = val
 				except Exception:
 					settings[r.key] = r.value
 	except Exception:
@@ -92,6 +128,104 @@ async def save_settings_to_db(data: dict):
 			else:
 				session.add(Setting(key=k, value=v))
 		await session.commit()
+
+
+@app.post("/admin/trigger_reminders")
+async def ui_trigger_reminders(request: Request, trigger_assignment: str | None = Form(None), trigger_registration: str | None = Form(None)):
+	"""Set a manual trigger in the DB so the bot watcher can pick it up and send reminders immediately."""
+	if not is_admin_ui(request):
+		return RedirectResponse(url="/admin")
+	assignment = bool(trigger_assignment)
+	registration = bool(trigger_registration)
+	if not (assignment or registration):
+		# nothing selected
+		return RedirectResponse(url="/admin/settings", status_code=302)
+	# upsert Setting('manual_trigger') with timestamp
+	from datetime import datetime
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(Setting).where(Setting.key == 'manual_trigger'))
+		rec = result.scalar_one_or_none()
+		payload = {
+			"assignment": assignment,
+			"registration": registration,
+			"ts": datetime.utcnow().isoformat(),
+		}
+		if rec:
+			rec.value = payload
+			session.add(rec)
+		else:
+			session.add(Setting(key='manual_trigger', value=payload))
+		await session.commit()
+
+		# Persist an initial queued history entry (we will update it after calling bot)
+		try:
+			hist_entry = {
+				'ts': payload['ts'],
+				'requested_assignment': assignment,
+				'requested_registration': registration,
+				'status': 'queued',
+			}
+			result = await session.execute(select(Setting).where(Setting.key == 'manual_trigger_history'))
+			rec_hist = result.scalar_one_or_none()
+			if rec_hist and isinstance(rec_hist.value, list):
+				history = rec_hist.value
+			else:
+				history = []
+			history.append(hist_entry)
+			# keep only last 10
+			history = history[-10:]
+			if rec_hist:
+				rec_hist.value = history
+				session.add(rec_hist)
+			else:
+				session.add(Setting(key='manual_trigger_history', value=history))
+			await session.commit()
+		except Exception:
+			pass
+
+		# Try to call bot internal endpoint for immediate feedback (only if secret provided)
+		trigger_result = None
+		if BOT_INTERNAL_URL and BOT_INTERNAL_SECRET:
+			async with aiohttp.ClientSession() as client:
+				try:
+					resp = await client.post(BOT_INTERNAL_URL, json=payload, headers={'X-Internal-Token': BOT_INTERNAL_SECRET}, timeout=30)
+					if resp.status == 200:
+						trigger_result = await resp.json()
+					else:
+						try:
+							text = await resp.text()
+						except Exception:
+							text = None
+						trigger_result = {'error': f'bot returned status {resp.status}', 'detail': text}
+				except Exception as e:
+					trigger_result = {'error': 'failed_to_call_bot', 'detail': str(e)}
+
+		# Update last history entry with result if available
+		try:
+			async_session2 = get_session()
+			async with async_session2 as session2:
+				result = await session2.execute(select(Setting).where(Setting.key == 'manual_trigger_history'))
+				rec2 = result.scalar_one_or_none()
+				if rec2 and isinstance(rec2.value, list) and len(rec2.value) > 0:
+					last = rec2.value[-1]
+					# attach result details
+					if isinstance(trigger_result, dict) and not trigger_result.get('error'):
+						last['assignment_sent'] = trigger_result.get('assignment_sent', 0)
+						last['registration_sent'] = trigger_result.get('registration_sent', 0)
+						last['status'] = 'done'
+					else:
+						last['status'] = 'error'
+						last['error'] = trigger_result.get('error') if isinstance(trigger_result, dict) else 'no_result'
+					# persist back
+					rec2.value[-1] = last
+					session2.add(rec2)
+					await session2.commit()
+		except Exception:
+			pass
+
+		settings = await load_settings_async()
+		return templates.TemplateResponse("edit_settings.html", {"request": request, "settings": settings, "trigger_result": trigger_result})
 
 
 # ===== Pydantic models for request/response =====
@@ -252,7 +386,10 @@ async def ui_users(request: Request):
 	async with async_session as session:
 		result = await session.execute(select(User))
 		users = result.scalars().all()
-	return templates.TemplateResponse("list_users.html", {"request": request, "users": users})
+	# load admin ids from DB-backed settings if present
+	settings = await load_settings_async()
+	admin_ids = settings.get('admin_ids') or []
+	return templates.TemplateResponse("list_users.html", {"request": request, "users": users, "admin_ids": admin_ids})
 
 
 @app.get("/admin/users/{user_id}/edit")
@@ -328,6 +465,93 @@ async def ui_delete_user(request: Request, user_id: int):
 	return RedirectResponse(url="/admin/users", status_code=302)
 
 
+def _update_env_admin_ids(admin_ids: list[int]):
+	"""Update local .env file's ADMIN_IDS line (best-effort)."""
+	# project root /.env
+	env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+	try:
+		if os.path.exists(env_path):
+			with open(env_path, 'r', encoding='utf-8') as f:
+				lines = f.readlines()
+			found = False
+			new_line = f"ADMIN_IDS={','.join(str(x) for x in admin_ids)}\n"
+			for i, l in enumerate(lines):
+				if l.strip().startswith('ADMIN_IDS='):
+					lines[i] = new_line
+					found = True
+					break
+			if not found:
+				lines.append(new_line)
+			with open(env_path, 'w', encoding='utf-8') as f:
+				f.writelines(lines)
+	except Exception:
+		# best-effort only; ignore failures
+		pass
+
+
+@app.post("/admin/users/{user_id}/make_admin")
+async def ui_make_admin(request: Request, user_id: int):
+	if not is_admin_ui(request):
+		return RedirectResponse(url="/admin")
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(User).where(User.id == user_id))
+		user = result.scalar_one_or_none()
+		if not user or not getattr(user, 'telegram_id', None):
+			return RedirectResponse(url="/admin/users", status_code=302)
+
+		# load or create Setting row
+		result = await session.execute(select(Setting).where(Setting.key == 'admin_ids'))
+		rec = result.scalar_one_or_none()
+		if rec and isinstance(rec.value, list):
+			ids = [int(x) for x in rec.value]
+		else:
+			ids = []
+
+		if int(user.telegram_id) not in ids:
+			ids.append(int(user.telegram_id))
+		# persist
+		if rec:
+			rec.value = ids
+			session.add(rec)
+		else:
+			session.add(Setting(key='admin_ids', value=ids))
+		await session.commit()
+
+	# also update local .env for convenience
+	_update_env_admin_ids(ids)
+	return RedirectResponse(url="/admin/users", status_code=302)
+
+
+@app.post("/admin/users/{user_id}/remove_admin")
+async def ui_remove_admin(request: Request, user_id: int):
+	if not is_admin_ui(request):
+		return RedirectResponse(url="/admin")
+	async_session = get_session()
+	async with async_session as session:
+		result = await session.execute(select(User).where(User.id == user_id))
+		user = result.scalar_one_or_none()
+		if not user or not getattr(user, 'telegram_id', None):
+			return RedirectResponse(url="/admin/users", status_code=302)
+
+		result = await session.execute(select(Setting).where(Setting.key == 'admin_ids'))
+		rec = result.scalar_one_or_none()
+		if rec and isinstance(rec.value, list):
+			ids = [int(x) for x in rec.value]
+		else:
+			ids = []
+
+		if int(user.telegram_id) in ids:
+			ids = [x for x in ids if x != int(user.telegram_id)]
+		if rec:
+			rec.value = ids
+			session.add(rec)
+			await session.commit()
+
+	_update_env_admin_ids(ids)
+	return RedirectResponse(url="/admin/users", status_code=302)
+
+
 @app.get("/users/{user_id}")
 async def get_user(user_id: int) -> UserResponse:
 	"""Get a specific user by ID."""
@@ -379,21 +603,92 @@ async def ui_settings(request: Request):
 
 
 @app.post("/admin/settings")
-async def ui_settings_post(request: Request, assignment_reminder_hours: int = Form(48), registration_reminder_hours: int = Form(24), assignment_reminder_max: int = Form(3), reminder_enabled: str | None = Form(None)):
+async def ui_settings_post(
+	request: Request,
+	assignment_reminder_hours: int = Form(48),
+	registration_reminder_hours: int = Form(24),
+	assignment_reminder_max: int = Form(3),
+	reminder_enabled: str | None = Form(None),
+	reminder_check_interval_minutes: int = Form(60),
+	assignment_reminder_minutes: str | None = Form(None),
+	registration_reminder_minutes: str | None = Form(None),
+):
 	if not is_admin_ui(request):
 		return RedirectResponse(url="/admin")
+	
+	# Валидация входных данных
+	try:
+		assignment_reminder_hours = int(assignment_reminder_hours)
+		registration_reminder_hours = int(registration_reminder_hours)
+		assignment_reminder_max = int(assignment_reminder_max)
+		reminder_check_interval_minutes = int(reminder_check_interval_minutes)
+		# optional minute overrides (can be blank)
+		import re
+		def norm_minutes(val):
+			if val in (None, '', 'None'):
+				return None
+			# strip non-digits (handles inputs like '"30"' or '\\"30\\"')
+			if isinstance(val, str):
+				clean = re.sub(r'[^0-9]', '', val)
+				if clean == '':
+					return None
+					return int(clean)
+			# fallback
+			return int(val)
+		assignment_reminder_minutes = norm_minutes(assignment_reminder_minutes)
+		registration_reminder_minutes = norm_minutes(registration_reminder_minutes)
+		
+		# Проверка диапазонов
+		if not (1 <= assignment_reminder_hours <= 720):  # 1 час - 30 дней
+			raise ValueError("Интервал напоминаний о назначении должен быть между 1 и 720 часами")
+		if not (1 <= registration_reminder_hours <= 720):  # 1 час - 30 дней
+			raise ValueError("Интервал напоминаний о регистрации должен быть между 1 и 720 часами")
+		# if not (1 <= assignment_reminder_max <= 10):
+		if not (1 <= assignment_reminder_max <= 999):
+			raise ValueError("Максимум напоминаний должен быть между 1 и 999")
+		if not (1 <= reminder_check_interval_minutes <= 1440):
+			raise ValueError("Интервал проверки напоминаний должен быть между 1 и 1440 минут (1 день)")
+		if assignment_reminder_minutes is not None and not (1 <= assignment_reminder_minutes <= 60*24):
+			raise ValueError("Интервал напоминаний о назначении в минутах должен быть между 1 и 1440")
+		if registration_reminder_minutes is not None and not (1 <= registration_reminder_minutes <= 60*24):
+			raise ValueError("Интервал напоминаний о регистрации в минутах должен быть между 1 и 1440")
+	except (ValueError, TypeError) as e:
+		logger.warning(f"Invalid settings input: {e}")
+		# Возвращаем с ошибкой
+		settings = await load_settings_async()
+		return templates.TemplateResponse(
+			"edit_settings.html",
+			{
+				"request": request,
+				"settings": settings,
+				"error": str(e)
+			},
+			status_code=400
+		)
+	
+	# Загружаем текущие настройки
 	settings = await load_settings_async()
-	settings['assignment_reminder_hours'] = int(assignment_reminder_hours)
-	settings['registration_reminder_hours'] = int(registration_reminder_hours)
-	settings['assignment_reminder_max'] = int(assignment_reminder_max)
+	
+	# Обновляем значения
+	old_settings = settings.copy()
+	settings['assignment_reminder_hours'] = assignment_reminder_hours
+	settings['registration_reminder_hours'] = registration_reminder_hours
+	settings['assignment_reminder_max'] = assignment_reminder_max
 	settings['reminder_enabled'] = bool(reminder_enabled)
-	# Save to JSON file for backward compatibility
+	settings['assignment_reminder_minutes'] = assignment_reminder_minutes
+	settings['registration_reminder_minutes'] = registration_reminder_minutes
+	settings['reminder_check_interval_minutes'] = reminder_check_interval_minutes
+	
+	# Сохраняем в JSON для обратной совместимости
 	save_settings(settings)
-	# Also persist to DB asynchronously
+	
+	# Сохраняем в БД асинхронно
 	try:
 		await save_settings_to_db(settings)
-	except Exception:
+		logger.info(f"Settings updated successfully: {settings}")
+	except Exception as e:
 		logger.exception("Failed to save settings to DB; falling back to JSON only")
+	
 	return RedirectResponse(url="/admin/settings", status_code=302)
 
 

@@ -6,27 +6,28 @@ from aiogram.filters import Command
 from aiogram.types import Message, Document, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from sqlalchemy import delete
 from aiogram.fsm.context import FSMContext
-from bot.config import ADMIN_IDS, SEND_REAL_NOTIFICATIONS
+from bot.config import SEND_REAL_NOTIFICATIONS
+from bot.utils import is_admin
 from bot.randomizer import perform_draw
 from bot.db.models import User, Route1Entry, Route2Entry, Assignment, NotificationLog
 from bot.db.database import get_session
 from bot.logger import get_logger
 from sqlalchemy import select
 import json
+from bot.notifications import build_assignment_notification
 
 logger = get_logger("admin")
 router = Router()
 
 
-def is_admin(user_id: int) -> bool:
-	return user_id in ADMIN_IDS
+# use `is_admin` from `bot.utils` (async)
 
 
 @router.callback_query(lambda c: c.data == "admin_draw_r1")
 async def cb_admin_draw_r1(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_draw_r1")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -45,7 +46,7 @@ async def cb_admin_draw_r1(callback: CallbackQuery):
 async def cb_admin_draw_r2(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_draw_r2")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -64,7 +65,7 @@ async def cb_admin_draw_r2(callback: CallbackQuery):
 async def cb_admin_notify(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_notify")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -100,100 +101,12 @@ async def cb_admin_notify(callback: CallbackQuery):
 				logger.warning(f"No giver user found for giver_id {giver_id}")
 				continue
 
-			# For each assignment of this giver, fetch receiver and their entry
-			parts = []
-			buttons = []
+			# Build combined message and button texts using shared helper
 			nlogs_created = []
+			send_text, buttons = await build_assignment_notification(session, giver_assignments)
+
+			# Create a NotificationLog entry per assignment (pending)
 			for a in giver_assignments:
-				result = await session.execute(select(User).where(User.id == a.receiver_user_id))
-				receiver = result.scalar_one_or_none()
-				# Try to get latest completed entry depending on route
-				if a.route_type == 1:
-					result = await session.execute(
-						select(Route1Entry).where(Route1Entry.user_id == a.receiver_user_id).where(Route1Entry.status == 'completed')
-					)
-					rentry = result.scalar_one_or_none()
-				else:
-					result = await session.execute(
-						select(Route2Entry).where(Route2Entry.user_id == a.receiver_user_id).where(Route2Entry.status == 'completed')
-					)
-					rentry = result.scalar_one_or_none()
-
-				recv_name = receiver.telegram_username or f"{receiver.first_name or ''} {receiver.last_name or ''}" if receiver else 'Получатель'
-
-				# Build readable wishlist / survey
-				def format_survey(srv):
-					labels = {
-						'favorite_color': 'Любимый цвет',
-						'favorite_activity': 'Любимый вид деятельности',
-						'favorite_genre': 'Любимый жанр',
-						'hobby': 'Хобби',
-						'undesired_gift': 'Чего бы не хотели получить',
-						'favorite_snack': 'Любимый перекус',
-						'favorite_brands': 'Любимые бренды/магазины',
-						'allergies': 'Аллергии/предпочтения',
-					}
-					try:
-						if isinstance(srv, dict):
-							items = [f"{labels.get(k, k)}: {v}" for k, v in srv.items()]
-						else:
-							items = [str(srv)]
-						return "\n".join(items)
-					except Exception:
-						return str(srv)
-
-				if a.route_type == 1:
-					# For physical gift route include wishlist and address
-					if rentry and getattr(rentry, 'survey', None):
-						survey_obj = None
-						if isinstance(rentry.survey, (dict, list)):
-							survey_obj = rentry.survey
-						else:
-							try:
-								survey_obj = json.loads(rentry.survey)
-							except Exception:
-								survey_obj = None
-
-						if survey_obj is not None:
-							wishlist = 'Анкета:\n' + format_survey(survey_obj)
-						else:
-							wishlist = str(rentry.survey)
-					else:
-						wishlist = (rentry.wishlist if rentry and getattr(rentry, 'wishlist', None) else 'Пожелания отсутствуют')
-
-					delivery = rentry.full_address if (rentry and getattr(rentry, 'full_address', None)) else ''
-					if not delivery and rentry and getattr(rentry, 'pickup_company', None):
-						delivery = f"Пункт выдачи: {rentry.pickup_company}, {getattr(rentry, 'pickup_address', '') or ''}"
-					recipient_phone = ''
-					if rentry:
-						recipient_phone = getattr(rentry, 'postal_recipient_phone', None) or getattr(rentry, 'pickup_recipient_phone', None) or ''
-
-					part_text = (
-						f"Вы Тайный Санта для: {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
-						f"{wishlist}\n"
-						f"Адрес / пункт выдачи:\n{delivery}\n"
-						f"Телефон: {recipient_phone}\n"
-					)
-				else:
-					# For digital route include only email and phone
-					email = getattr(rentry, 'email', '') if rentry else ''
-					phone = ''
-					if rentry:
-						phone = getattr(rentry, 'postal_recipient_phone', None) or getattr(rentry, 'pickup_recipient_phone', None) or ''
-					part_text = (
-						f"Вы Диджитал Санта для: {('@' + receiver.telegram_username) if receiver and receiver.telegram_username else recv_name}\n"
-						f"Email для поздравления: {email or 'Не указан'}\n"
-						f"Телефон: {phone or 'Не указан'}\n"
-					)
-				parts.append(part_text)
-
-				# Determine button text for this assignment
-				if a.route_type == 2:
-					buttons.append('Поздравление отправлено')
-				else:
-					buttons.append('Подарок отправлен')
-
-				# Create a NotificationLog entry per assignment (pending)
 				nlog = NotificationLog(
 					user_id=giver.id if giver else None,
 					channel='telegram',
@@ -205,41 +118,14 @@ async def cb_admin_notify(callback: CallbackQuery):
 				await session.commit()
 				nlogs_created.append(nlog)
 
-			# Build combined message from parts (each part already contains route-specific details)
-			send_text = "\n---\n".join(parts)
-			has_r1 = any(a.route_type == 1 for a in giver_assignments)
-			has_r2 = any(a.route_type == 2 for a in giver_assignments)
-			# Prefix rules:
-			# - only route1: "Ваш тайный санта найден"
-			# - only route2: if single assignment include @username, else plural header
-			# - mixed: keep the Тайный Санта header
-			if has_r1 and not has_r2:
-				send_text = "Ваш тайный санта найден\n\n" + send_text
-			elif has_r2 and not has_r1:
-				# only digital assignments
-				if len(giver_assignments) == 1:
-					first_assignment = giver_assignments[0]
-					result = await session.execute(select(User).where(User.id == first_assignment.receiver_user_id))
-					first_receiver = result.scalar_one_or_none()
-					recv_display = (('@' + first_receiver.telegram_username) if first_receiver and first_receiver.telegram_username else (first_receiver.first_name or 'Получатель'))
-					send_text = f"Ваш диджитал санта найден {recv_display}\n\n" + send_text
-				else:
-					send_text = "Ваши диджитал санты найдены\n\n" + send_text
-			else:
-				# mixed types — lead with тайный санта header
-				send_text = "Ваш тайный санта найден\n\n" + send_text
-			# Append recommendation only when route1 present
-			if has_r1:
-				send_text += "\nРекомендуемая сумма для подарка не более 1000 р.\n"
-
 			# Update payloads of nlogs created for this giver to include full text
 			for nl in nlogs_created:
 				nl.payload = send_text
 				session.add(nl)
 
-			# Safe-send: when SEND_REAL_NOTIFICATIONS is False (default), only ADMIN_IDS receive messages
-			if not SEND_REAL_NOTIFICATIONS and giver.telegram_id not in ADMIN_IDS:
-				logger.info(f"Skipping send to {giver.telegram_id} (not in ADMIN_IDS) — logged only")
+			# Safe-send: when SEND_REAL_NOTIFICATIONS is False (default), only admins receive messages
+			if not SEND_REAL_NOTIFICATIONS and not await is_admin(giver.telegram_id):
+				logger.info(f"Skipping send to {giver.telegram_id} (not an admin) — logged only")
 				skipped_count += 1
 				await session.commit()
 				continue
@@ -254,7 +140,7 @@ async def cb_admin_notify(callback: CallbackQuery):
 				ikb.inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"mark_sent:{a.id}")])
 
 			try:
-				await callback.bot.send_message(chat_id=giver.telegram_id, text=send_text, reply_markup=ikb)
+				await callback.bot.send_message(chat_id=giver.telegram_id, text=send_text, reply_markup=ikb, parse_mode="HTML")
 				# mark notification logs as sent (but do not mark assignments as sent — user must confirm)
 				for nl in nlogs_created:
 					nl.status = 'sent'
@@ -393,7 +279,7 @@ async def cb_mark_sent(callback: CallbackQuery):
 			return
 
 		# Only the giver (by telegram_id) or admins can mark as sent
-		if user_id != giver.telegram_id and user_id not in ADMIN_IDS:
+		if user_id != giver.telegram_id and not await is_admin(user_id):
 			await callback.message.answer('❌ Вы не можете изменить статус этого назначения')
 			return
 
@@ -458,7 +344,7 @@ async def cb_mark_sent(callback: CallbackQuery):
 async def cb_admin_export(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_export")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -545,7 +431,7 @@ async def cb_admin_close(callback: CallbackQuery):
 async def cb_admin_reset(callback: CallbackQuery):
 	await callback.answer()
 	user_id = callback.from_user.id
-	if not is_admin(user_id):
+	if not await is_admin(user_id):
 		logger.warning(f"Non-admin user {user_id} attempted admin_reset")
 		await callback.message.answer("❌ У вас нет прав администратора")
 		return
@@ -564,7 +450,7 @@ async def cb_admin_reset(callback: CallbackQuery):
 
 @router.message(Command("draw"))
 async def cmd_draw(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		await message.answer("❌ У вас нет прав администратора")
 		return
 	
@@ -573,7 +459,7 @@ async def cmd_draw(message: Message):
 
 @router.message(Command("draw_route1"))
 async def cmd_draw_route1(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /draw_route1")
 		await message.answer("❌ У вас нет прав администратора")
 		return
@@ -590,7 +476,7 @@ async def cmd_draw_route1(message: Message):
 
 @router.message(Command("draw_route2"))
 async def cmd_draw_route2(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /draw_route2")
 		await message.answer("❌ У вас нет прав администратора")
 		return
@@ -607,7 +493,7 @@ async def cmd_draw_route2(message: Message):
 
 @router.message(Command("notify_route1"))
 async def cmd_notify_route1(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /notify_route1")
 		await message.answer("❌ У вас нет прав администратора")
 		return
@@ -672,13 +558,22 @@ async def cmd_notify_route1(message: Message):
 			if rentry:
 				recipient_phone = rentry.postal_recipient_phone or rentry.pickup_recipient_phone or ''
 
+			# Determine delivery method for display
+			if rentry and rentry.pickup_type == 'postal':
+				delivery_method = f"📮 Почта: {rentry.postal_city or ''}, {rentry.postal_street or ''}, д. {rentry.postal_building or ''}"
+			else:
+				delivery_method = f"🏢 {rentry.pickup_company or 'Пункт выдачи'}: {rentry.pickup_address or ''}"
+
 			text = (
-				f"🎁 Розыгрыш завершён — у вас есть получатель!\n\n"
-				f"Вы — Тайный Санта для: {recv_name}\n\n"
-				f"Пожелания:\n{wishlist}\n\n"
-				f"Адрес / пункт выдачи:\n{delivery}\n"
-				f"Телефон получателя: {recipient_phone}\n\n"
-				f"Рекомендуемая сумма для подарка не более 1000 р.\n"
+				f"<b>Твой адресат выбран! ❄️</b>\n\n"
+				f"Ты — Тайный Санта для: {recv_name} ⛄\n\n"
+				f"<b>Пожелания:</b>\n"
+				f"{wishlist}\n\n"
+				f"<b>Способ доставки:</b>\n"
+				f"{delivery_method}\n"
+				f"<b>Телефон:</b> {recipient_phone or 'Не указан'}\n\n"
+				f"Рекомендуемая сумма для подарка не более 1000 р. 💝\n\n"
+				f"Пусть твой подарок станет для кого-то маленьким, но очень важным зимним чудом. 🎄🍪"
 			)
 
 			# Create NotificationLog (pending)
@@ -692,13 +587,13 @@ async def cmd_notify_route1(message: Message):
 			session.add(nlog)
 			await session.commit()
 
-			if not SEND_REAL_NOTIFICATIONS and giver.telegram_id not in ADMIN_IDS:
-				logger.info(f"Skipping send to {giver.telegram_id} (not in ADMIN_IDS) — logged only")
+			if not SEND_REAL_NOTIFICATIONS and not await is_admin(giver.telegram_id):
+				logger.info(f"Skipping send to {giver.telegram_id} (not an admin) — logged only")
 				skipped_count += 1
 				continue
 
 			try:
-				await message.bot.send_message(chat_id=giver.telegram_id, text=text)
+				await message.bot.send_message(chat_id=giver.telegram_id, text=text, parse_mode="HTML")
 				nlog.status = 'sent'
 				nlog.sent_at = datetime.utcnow()
 				db_assignment.sent_status = 'sent'
@@ -719,7 +614,7 @@ async def cmd_notify_route1(message: Message):
 
 @router.message(Command("notify_route2"))
 async def cmd_notify_route2(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /notify_route2")
 		await message.answer("❌ У вас нет прав администратора")
 		return
@@ -746,7 +641,7 @@ async def cmd_notify_route2(message: Message):
 
 @router.message(Command("export_route1"))
 async def cmd_export_route1(message: Message):
-	if not is_admin(message.from_user.id):
+	if not await is_admin(message.from_user.id):
 		logger.warning(f"Non-admin user {message.from_user.id} attempted /export_route1")
 		await message.answer("❌ У вас нет прав администратора")
 		return
