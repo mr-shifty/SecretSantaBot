@@ -512,101 +512,72 @@ async def cmd_notify_route1(message: Message):
 	sent_count = 0
 	skipped_count = 0
 	failed_count = 0
-	for assignment in assignments:
+
+	# Group assignments by giver and send combined messages using the shared helper
+	givers_map: dict[int, list[Assignment]] = {}
+	for a in assignments:
+		givers_map.setdefault(a.giver_user_id, []).append(a)
+
+	for giver_id, giver_assignments in givers_map.items():
 		async_session = get_session()
 		async with async_session as session:
-			result = await session.execute(select(Assignment).where(Assignment.id == assignment.id))
-			db_assignment = result.scalar_one_or_none()
-
-			result = await session.execute(select(User).where(User.id == db_assignment.giver_user_id))
+			result = await session.execute(select(User).where(User.id == giver_id))
 			giver = result.scalar_one_or_none()
-			result = await session.execute(select(User).where(User.id == db_assignment.receiver_user_id))
-			receiver = result.scalar_one_or_none()
-			result = await session.execute(
-				select(Route1Entry).where(Route1Entry.user_id == db_assignment.receiver_user_id).where(Route1Entry.status == 'completed')
-			)
-			rentry = result.scalar_one_or_none()
-
 			if not giver:
-				logger.warning(f"No giver user found for assignment {assignment.id}")
+				logger.warning(f"No giver user found for giver_id {giver_id}")
 				continue
 
-			recv_name = receiver.telegram_username or f"{receiver.first_name or ''} {receiver.last_name or ''}" if receiver else 'Получатель'
-			if rentry and rentry.survey:
-				survey_obj = None
-				if isinstance(rentry.survey, (dict, list)):
-					survey_obj = rentry.survey
-				else:
-					try:
-						survey_obj = json.loads(rentry.survey)
-					except Exception:
-						survey_obj = None
+			send_text, buttons = await build_assignment_notification(session, giver_assignments)
 
-				if survey_obj is not None:
-					try:
-						wishlist = "Анкета:\n" + "\n".join([f"{k}: {v}" for k, v in survey_obj.items()])
-					except Exception:
-						wishlist = str(survey_obj)
-				else:
-					wishlist = rentry.survey
-			else:
-				wishlist = (rentry.wishlist if rentry and rentry.wishlist else 'Пожелания отсутствуют')
-			delivery = rentry.full_address if (rentry and rentry.full_address) else ''
-			if not delivery and rentry and rentry.pickup_company:
-				delivery = f"Пункт выдачи: {rentry.pickup_company}, {rentry.pickup_address or ''}"
-			recipient_phone = ''
-			if rentry:
-				recipient_phone = rentry.postal_recipient_phone or rentry.pickup_recipient_phone or ''
+			# Create pending NotificationLog entries and set payloads
+			nlogs_created = []
+			for a in giver_assignments:
+				nlog = NotificationLog(
+					user_id=giver.id if giver else None,
+					channel='telegram',
+					notif_type='assignment',
+					payload=None,
+					status='pending'
+				)
+				session.add(nlog)
+				await session.commit()
+				nlogs_created.append(nlog)
 
-			# Determine delivery method for display
-			if rentry and rentry.pickup_type == 'postal':
-				delivery_method = f"📮 Почта: {rentry.postal_city or ''}, {rentry.postal_street or ''}, д. {rentry.postal_building or ''}"
-			else:
-				delivery_method = f"🏢 {rentry.pickup_company or 'Пункт выдачи'}: {rentry.pickup_address or ''}"
+			for nl in nlogs_created:
+				nl.payload = send_text
+				session.add(nl)
 
-			text = (
-				f"<b>Твой адресат выбран! ❄️</b>\n\n"
-				f"Ты — Тайный Санта для: {recv_name} ⛄\n\n"
-				f"<b>Пожелания:</b>\n"
-				f"{wishlist}\n\n"
-				f"<b>Способ доставки:</b>\n"
-				f"{delivery_method}\n"
-				f"<b>Телефон:</b> {recipient_phone or 'Не указан'}\n\n"
-				f"Рекомендуемая сумма для подарка не более 1000 р. 💝\n\n"
-				f"Пусть твой подарок станет для кого-то маленьким, но очень важным зимним чудом. 🎄🍪"
-			)
-
-			# Create NotificationLog (pending)
-			nlog = NotificationLog(
-				user_id=giver.id if giver else None,
-				channel='telegram',
-				notif_type='assignment',
-				payload=text,
-				status='pending'
-			)
-			session.add(nlog)
-			await session.commit()
-
+			# Safe send: in test mode (no real notifications), only admins are delivered messages
 			if not SEND_REAL_NOTIFICATIONS and not await is_admin(giver.telegram_id):
 				logger.info(f"Skipping send to {giver.telegram_id} (not an admin) — logged only")
 				skipped_count += 1
+				await session.commit()
 				continue
 
+			# Build inline keyboard with appropriate labels
+			ikb = InlineKeyboardMarkup(inline_keyboard=[])
+			for a in giver_assignments:
+				if a.route_type == 2:
+					btn_text = 'Поздравление отправлено'
+				else:
+					btn_text = 'Подарок отправлен'
+				ikb.inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"mark_sent:{a.id}")])
+
 			try:
-				await message.bot.send_message(chat_id=giver.telegram_id, text=text, parse_mode="HTML")
-				nlog.status = 'sent'
-				nlog.sent_at = datetime.utcnow()
-				db_assignment.sent_status = 'sent'
+				await message.bot.send_message(chat_id=giver.telegram_id, text=send_text, reply_markup=ikb, parse_mode="HTML")
+				for nl in nlogs_created:
+					nl.status = 'sent'
+					nl.sent_at = datetime.utcnow()
+					session.add(nl)
+				await session.commit()
 				sent_count += 1
 			except Exception as exc:
-				logger.exception(f"Failed to send notification for assignment {assignment.id}: {exc}")
-				nlog.status = 'failed'
-				db_assignment.sent_status = 'failed'
+				logger.exception(f"Failed to send combined notification to giver {giver_id}: {exc}")
+				for nl in nlogs_created:
+					nl.status = 'failed'
+					session.add(nl)
+				await session.commit()
 				failed_count += 1
-
-			session.add(nlog)
-			session.add(db_assignment)
-			await session.commit()
 
 	logger.info(f"Sent {sent_count} notifications for route1 (skipped: {skipped_count}, failed: {failed_count})")
 	await message.answer(f"✅ Отправлено уведомлений: {sent_count}\n✳️ Пропущено (режим теста): {skipped_count}\n❗ Ошибок: {failed_count}")

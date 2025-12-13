@@ -82,6 +82,21 @@
         <label class="form-label">Телефон получателя</label>
         <input class="form-control" name="pickup_recipient_phone" value="{{ entry.pickup_recipient_phone or '' }}" required>
       </div>
+      
+        <div class="mb-3">
+          <label for="pickup_index">Почтовый индекс (для курьера)</label>
+          <input class="form-control" name="pickup_index" value="{{ entry.pickup_index or '' }}">
+        </div>
+      
+        <div class="mb-3">
+          <label for="pickup_point_id">Идентификатор пункта выдачи</label>
+          <input class="form-control" name="pickup_point_id" value="{{ entry.pickup_point_id or '' }}">
+        </div>
+      
+        <div class="mb-3">
+          <label for="pickup_delivery_mode">Режим доставки</label>
+          <input class="form-control" name="pickup_delivery_mode" value="{{ entry.pickup_delivery_mode or '' }}">
+        </div>
     </fieldset>
   {% endif %}
 

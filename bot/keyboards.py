@@ -55,3 +55,21 @@ def reply_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     # One button per row to make them full-width on mobile
     kb = ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
     return kb
+
+
+def delivery_method_keyboard() -> InlineKeyboardMarkup:
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    buttons = [
+        [InlineKeyboardButton(text="Почта России", callback_data="delivery:postal")],
+        [InlineKeyboardButton(text="СДЭК", callback_data="delivery:cdek"), InlineKeyboardButton(text="Яндекс GO", callback_data="delivery:yandex_go")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def pickup_mode_keyboard() -> InlineKeyboardMarkup:
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    buttons = [
+        [InlineKeyboardButton(text="До двери", callback_data="pickupmode:door")],
+        [InlineKeyboardButton(text="Пункт выдачи", callback_data="pickupmode:point")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)

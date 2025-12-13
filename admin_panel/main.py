@@ -257,6 +257,11 @@ class Route1EntryResponse(BaseModel):
 	postal_corpus: str | None
 	postal_apartment: str | None
 	postal_recipient_fullname: str | None
+	postal_recipient_last_name: str | None
+	postal_recipient_first_name: str | None
+	postal_recipient_patronymic: str | None
+	postal_index: str | None
+	postal_branch_number: str | None
 	postal_recipient_phone: str | None
 	pickup_company: str | None
 	pickup_address: str | None
@@ -727,6 +732,9 @@ async def ui_edit_route1_post(
     pickup_address: str | None = Form(None),
     pickup_recipient_fullname: str | None = Form(None),
     pickup_recipient_phone: str | None = Form(None),
+    pickup_index: str | None = Form(None),
+    pickup_point_id: str | None = Form(None),
+    pickup_delivery_mode: str | None = Form(None),
 ):
     if not is_admin_ui(request):
         return RedirectResponse(url="/admin")
@@ -755,6 +763,9 @@ async def ui_edit_route1_post(
             entry.pickup_address = pickup_address
             entry.pickup_recipient_fullname = pickup_recipient_fullname
             entry.pickup_recipient_phone = pickup_recipient_phone
+            entry.pickup_index = pickup_index or None
+            entry.pickup_point_id = pickup_point_id or None
+            entry.pickup_delivery_mode = pickup_delivery_mode or None
         
         # Update user phone if provided
         result = await session.execute(select(User).where(User.id == entry.user_id))
