@@ -63,6 +63,75 @@
 
 2. **Админ-панель доступна на:** `http://localhost:8000/docs`
 
+### Развёртывание на сервере (production)
+
+Минимальная схема: Docker + docker-compose + обратный прокси с TLS (например, Caddy).
+
+1. **Подготовка сервера:**
+   - Установите Docker и docker-compose (Docker Compose v2 рекомендуется).
+   - Настройте DNS: `DOMAIN` (см. `.env.production.example`) должен указывать на IP сервера.
+
+2. **Скопируйте пример env и заполните:**
+   ```bash
+   cp .env.production.example .env.production
+   # отредактируйте .env.production: укажите DOMAIN, BOT_TOKEN, ADMIN_PASSWORD и др.
+   ```
+
+3. **Запуск в фоне:**
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d --build
+   ```
+
+4. **Открытые порты:**
+   - Откройте 80 и 443 (HTTP/HTTPS) в брандмауэре, чтобы Caddy мог получить и обновлять TLS-сертификаты.
+
+### Прямой доступ по IP (быстро, без TLS)
+
+- Если хотите доступить админ-панель напрямую по IP, можно открыть порт `8000` и пробросить его хосту.
+- В `docker-compose.prod.yml` уже есть `ports: - "8000:8000"` для сервиса `admin`.
+- Откройте порт и перезапустите стек:
+   ```bash
+   sudo ufw allow 8000/tcp
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d --build
+   ```
+- После этого админ-панель будет доступна по `http://<IP>:8000/admin`.
+- ВАЖНО: это соединение без TLS — используйте только в защищённой сети или временно. Для публичного доступа лучше настроить домен и HTTPS через Caddy.
+
+### Использование PostgreSQL
+
+- По умолчанию вы можете использовать SQLite, но для production рекомендуется PostgreSQL.
+- В `.env.production` задайте `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` и/или `DATABASE_URL`.
+- Если вы не зададите `DATABASE_URL`, контейнеры будут использовать локальный SQLite как fallback.
+- Пример `DATABASE_URL` для asyncpg-драйвера:
+   `postgresql+asyncpg://<user>:<password>@postgres:5432/<db>`
+
+Docker Compose в `docker-compose.prod.yml` уже содержит сервис `postgres`, поэтому достаточно настроить `.env.production` и запустить `docker compose up`.
+
+5. **Доступ к админ-панели:**
+   - После успешного запуска админ-панель будет доступна по https://<DOMAIN>/admin
+
+6. **Резервное копирование и безопасность:**
+   - `data.db` хранится в корне проекта, сделайте регулярные резервные копии.
+   - Используйте надёжный пароль в `ADMIN_PASSWORD`.
+   - Рассмотрите добавление базовой авторизации на прокси (Caddy поддерживает `basicauth`).
+
+7. **Запуск как сервис (systemd):**
+   - В качестве примера можно создать unit-файл для `docker compose` и запускать его как сервис. См. `systemd/secret_santa.service.example`.
+
+Примеры systemd-команд для установки unit:
+
+```bash
+sudo cp systemd/secret_santa.service.example /etc/systemd/system/secret_santa.service
+# отредактируйте путь к рабочей директории и файлу .env.production в unit при необходимости
+sudo systemctl daemon-reload
+sudo systemctl enable --now secret_santa.service
+sudo journalctl -fu secret_santa.service
+```
+
+Если используется PostgreSQL, база запускается внутри Docker-сети и порт по умолчанию не открыт наружу — это безопаснее для production.
+
+Если нужно, могу подготовить unit-файл под вашу систему и помочь с настройкой DNS/брандмауэра.
+
 ## Команды бота
 
 ### Для пользователей

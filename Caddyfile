@@ -1,0 +1,20 @@
+{
+    # Caddy will read DOMAIN from environment: export DOMAIN=example.com
+}
+
+{env.DOMAIN}
+# Redirect root to admin UI
+redir / /admin 302
+
+# Proxy everything to the admin service
+reverse_proxy * admin:8000
+
+# Security headers
+header {
+  Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+}
+
+# Example: to add basic auth for extra layer, uncomment and configure
+# basicauth /admin* {
+#   admin JDJhJDEyJ... (bcrypt hash)
+# }

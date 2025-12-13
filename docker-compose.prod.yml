@@ -1,0 +1,90 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secret_santa_bot
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data.db}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - BOT_INTERNAL_API_PORT=${BOT_INTERNAL_API_PORT:-9000}
+      - REMINDER_HOURS=${REMINDER_HOURS:-24}
+      - PYTHONPATH=/app
+    volumes:
+      - ./data.db:/app/data.db
+      - ./media:/app/media
+    entrypoint: /bin/bash -c "/app/scripts/wait_for_postgres.sh && alembic upgrade head && python -m bot.main"
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    networks:
+      - secret_santa_network
+
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secret_santa_admin
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data.db}
+      - BOT_INTERNAL_URL=${BOT_INTERNAL_URL:-http://bot:9000/internal/trigger_reminders}
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - PYTHONPATH=/app
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    volumes:
+      - ./data.db:/app/data.db
+      - ./media:/app/media
+    entrypoint: /bin/bash -c "/app/scripts/wait_for_postgres.sh && alembic upgrade head && uvicorn admin_panel.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000" # expose admin panel on host for direct IP access (no TLS)
+    depends_on:
+      - bot
+      - postgres
+    restart: unless-stopped
+    networks:
+      - secret_santa_network
+
+  postgres:
+    image: postgres:15
+    container_name: secret_santa_postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-secret}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secret}
+      - POSTGRES_DB=${POSTGRES_DB:-secret_santa}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-secret} -d ${POSTGRES_DB:-secret_santa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - secret_santa_network
+
+  caddy:
+    image: caddy:2
+    container_name: secret_santa_caddy
+    depends_on:
+      - admin
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    networks:
+      - secret_santa_network
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pgdata:
+
+networks:
+  secret_santa_network:
+    driver: bridge

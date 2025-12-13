@@ -5,6 +5,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -13,6 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+
+# make scripts executable (wait_for_postgres)
+RUN chmod +x /app/scripts/wait_for_postgres.sh || true
 
 # Default command (can be overridden in docker-compose)
 CMD ["python", "-m", "bot.main"]
