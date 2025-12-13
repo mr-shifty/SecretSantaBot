@@ -21,18 +21,35 @@ async def _resolve_internal_user_id(user_identifier: int) -> int | None:
 	Returns None if no user found.
 	"""
 	async_session = get_session()
+	# Normalize identifier to int if possible
+	try:
+		uid = int(user_identifier)
+	except Exception:
+		return None
+
 	async with async_session as session:
-		# First try as internal id
-		result = await session.execute(select(User).where(User.id == user_identifier))
-		user = result.scalar_one_or_none()
-		if user:
-			return user.id
+		# If this looks like an internal id (fits 32-bit signed int), try as internal id first.
+		# This avoids passing huge telegram IDs into the integer `users.id` query which fails on Postgres.
+		min_int32 = -(2 ** 31)
+		max_int32 = 2 ** 31 - 1
+		if min_int32 <= uid <= max_int32:
+			try:
+				result = await session.execute(select(User).where(User.id == uid))
+				user = result.scalar_one_or_none()
+				if user:
+					return user.id
+			except Exception:
+				# In case of DB errors (type cast), fall back to trying telegram_id
+				pass
 
 		# Then try as telegram_id
-		result = await session.execute(select(User).where(User.telegram_id == user_identifier))
-		user = result.scalar_one_or_none()
-		if user:
-			return user.id
+		try:
+			result = await session.execute(select(User).where(User.telegram_id == uid))
+			user = result.scalar_one_or_none()
+			if user:
+				return user.id
+		except Exception:
+			return None
 
 		return None
 
@@ -168,6 +185,7 @@ async def save_route2_entry(
 	notify_date: datetime | None = None,
 ):
 	# Resolve user identifier to internal User.id
+	resolved_user_id = await _resolve_internal_user_id(user_id)
 	if resolved_user_id is None:
 		logger.warning(f"save_route2_entry: unable to resolve user {user_id} to internal id; storing as-is")
 		resolved_user_id = user_id
