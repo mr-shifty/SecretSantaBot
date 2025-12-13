@@ -20,6 +20,11 @@ def upgrade():
     if conn.dialect.name != 'postgresql':
         return
 
+    # Skip if survey column is already json/jsonb
+    col_type = conn.execute(sa.text("SELECT data_type FROM information_schema.columns WHERE table_name='route1_entries' AND column_name='survey';")).scalar()
+    if col_type in ('json', 'jsonb'):
+        return
+
     # 1) Wrap non-JSON textual values into JSON string values, e.g. "foo" => '"foo"'
     op.execute(
         """
