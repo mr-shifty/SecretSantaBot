@@ -24,7 +24,7 @@ def upgrade() -> None:
         sa.Column('first_name', sa.String(), nullable=True),
         sa.Column('last_name', sa.String(), nullable=True),
         sa.Column('phone', sa.String(), nullable=True),
-        sa.Column('is_active', sa.Boolean(), nullable=True, server_default=sa.text('1')),
+        sa.Column('is_active', sa.Boolean(), nullable=True, server_default=sa.text('true')),
         sa.Column('created_at', sa.DateTime(), nullable=True),
     )
 

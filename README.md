@@ -105,7 +105,70 @@
 - Пример `DATABASE_URL` для asyncpg-драйвера:
    `postgresql+asyncpg://<user>:<password>@postgres:5432/<db>`
 
-Docker Compose в `docker-compose.prod.yml` уже содержит сервис `postgres`, поэтому достаточно настроить `.env.production` и запустить `docker compose up`.
+Docker Compose в `docker-compose.prod.yml` уже содержит сервис `postgres`, поэтому достаточно настроить `.env.production` и запустить `docker compose up`. Ниже — подробная инструкция по настройке и использованию PostgreSQL в Docker.
+
+####  Подробная настройка PostgreSQL в Docker
+
+1) **Переменные окружения** — заполните `.env.production`:
+   - `POSTGRES_USER` — имя пользователя (например `secret`)
+   - `POSTGRES_PASSWORD` — пароль
+   - `POSTGRES_DB` — имя базы данных (например `secret_santa`)
+   - (опционально) `DATABASE_URL` — полный URL подключения (например `postgresql+asyncpg://secret:secret@postgres:5432/secret_santa`)
+
+2) **Запуск Postgres через Docker Compose** (отдельно или вместе со всем стеком):
+   ```bash
+   # Поднять только postgres
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d postgres
+
+   # Поднять весь стек
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d --build
+   ```
+
+3) **Проверка готовности и запуск миграций**:
+   - Postgres имеет `healthcheck`; дождитесь статуса `healthy`:
+     ```bash
+     docker compose ps
+     docker compose logs -f postgres
+     ```
+   - Запустите alembic вручную, если хотите контролировать порядок или отладить:
+     ```bash
+     docker compose exec bot alembic upgrade head
+     # или
+     docker compose exec admin alembic upgrade head
+     ```
+   Замечание: `alembic upgrade head` уже выполняется в `entrypoint` сервисов `admin` и `bot`, но иногда полезно вызвать вручную после миграции/переноса данных.
+
+4) **Бэкапы/восстановление**:
+   - Бэкап (на хост):
+     ```bash
+     docker compose exec postgres pg_dump -U ${POSTGRES_USER} ${POSTGRES_DB} > backup.sql
+     ```
+   - Восстановление:
+     ```bash
+     cat backup.sql | docker compose exec -T postgres psql -U ${POSTGRES_USER} ${POSTGRES_DB}
+     ```
+
+5) **Миграция данных из SQLite (опционально)**:
+   - Для переноса данных можно использовать `pgloader` (или кастомный скрипт миграции).
+   - Пример с `pgloader` через Docker (работает, если `data.db` доступен в корне и вы запускаете команду в папке проекта):
+     ```bash
+     docker run --rm --network $(docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production ps -q postgres | xargs docker inspect -f '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}') -v "$(pwd):/work" dpage/pgloader:latest \
+         pgloader /work/data.db postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB
+     ```
+   - Важно: после переноса проверьте целостность данных и пересчитайте индексы, если требуется.
+
+   Скрипты (`scripts/backup_postgres.sh`, `scripts/sqlite_to_postgres.sh`) включены в репозитории как примеры, не забудьте сделать их исполняемыми или запускать через `bash`:
+   ```bash
+   chmod +x scripts/backup_postgres.sh scripts/sqlite_to_postgres.sh
+   ./scripts/backup_postgres.sh backup.sql
+   ./scripts/sqlite_to_postgres.sh
+   ```
+
+6) **Безопасность и рекомендации**:
+   - Не экспонируйте порт Postgres наружу резко — держите его в Docker-сети, если возможно.
+   - Используйте надёжные пароли, ключи и бэкапы.
+   - Тестируйте миграции на копии данных, прежде чем применить к production.
+
 
 5. **Доступ к админ-панели:**
    - После успешного запуска админ-панель будет доступна по https://<DOMAIN>/admin
