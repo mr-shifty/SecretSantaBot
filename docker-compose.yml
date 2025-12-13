@@ -1,0 +1,49 @@
+version: "3.8"
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secret_santa_bot
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DATABASE_URL=sqlite+aiosqlite:///./data.db
+      - ADMIN_IDS=${ADMIN_IDS}
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET:-changeme}
+      - BOT_INTERNAL_API_PORT=${BOT_INTERNAL_API_PORT:-9000}
+      - REMINDER_HOURS=${REMINDER_HOURS:-24}
+      - PYTHONPATH=/app
+    volumes:
+      - ./data.db:/app/data.db
+      - ./media:/app/media
+    entrypoint: /bin/bash -c "alembic upgrade head && python -m bot.main"
+    ports:
+      - "9000:9000"
+    restart: unless-stopped
+    networks:
+      - secret_santa_network
+
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secret_santa_admin
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data.db
+      - BOT_INTERNAL_URL=${BOT_INTERNAL_URL:-http://bot:9000/internal/trigger_reminders}
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - PYTHONPATH=/app
+    volumes:
+      - ./data.db:/app/data.db
+      - ./media:/app/media
+    entrypoint: /bin/bash -c "alembic upgrade head && uvicorn admin_panel.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - secret_santa_network
+
+networks:
+  secret_santa_network:
+    driver: bridge

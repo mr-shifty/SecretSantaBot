@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Тайный Санта (с подарками) — записи</h3>
+<table class="table table-sm">
+<thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Тип доставки</th><th>Пожелания</th><th>Статус</th><th>Действия</th></tr></thead>
+<tbody>
+{% for e in entries %}
+<tr>
+  <td>{{ e.id }}</td>
+  <!-- <td>{{ e.user_id }}</td> -->
+  <td>{% if users and users.get(e.user_id) %}{{ users.get(e.user_id).telegram_username or users.get(e.user_id).telegram_id }}{% else %}{{ e.user_id }}{% endif %}</td>
+  <td>{{ e.email }}</td>
+  <td>
+    {% if e.pickup_type == 'postal' %}
+      📮 Почта
+    {% elif e.pickup_type == 'pickup' %}
+      🏢 ПВЗ
+    {% else %}
+      {{ e.pickup_type or '-' }}
+    {% endif %}
+  </td>
+  <td>{{ e.wishlist | truncate(50) if e.wishlist else '-' }}</td>
+  <td>{{ e.status }}</td>
+  <td>
+    <a href="/admin/route1/{{ e.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
+    <form method="post" action="/admin/route1/{{ e.id }}/delete" style="display:inline; margin-left:6px;">
+      <button class="btn btn-sm btn-danger" type="submit" onclick="return confirm('Удалить запись маршрута &quot;С подарками&quot;? Это действие необратимо.')">Delete</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

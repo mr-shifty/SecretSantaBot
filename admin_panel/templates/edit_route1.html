@@ -1,0 +1,117 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Редактировать запись 'Тайный Санта (с подарками)' #{{ entry.id }}</h3>
+
+<form method="post" action="/admin/route1/{{ entry.id }}/edit">
+  <div class="mb-3">
+    <label class="form-label">Email</label>
+    <input class="form-control" name="email" value="{{ entry.email }}" required>
+  </div>
+
+  <div class="mb-3">
+    <label class="form-label">Пожелания к подарку (обязательно)</label>
+    <textarea class="form-control" name="wishlist" required>{{ entry.wishlist or '' }}</textarea>
+  </div>
+
+  <div class="mb-3">
+    <label class="form-label"><strong>Тип доставки: {{ entry.pickup_type or 'unknown' }}</strong></label>
+  </div>
+
+  {% if entry.pickup_type == 'postal' %}
+    <!-- Postal delivery fields -->
+    <fieldset class="border p-3 mb-3">
+      <legend class="w-auto">📮 Доставка Почтой России</legend>
+      
+      <div class="mb-3">
+        <label class="form-label">Город</label>
+        <input class="form-control" name="postal_city" value="{{ entry.postal_city or '' }}" required>
+      </div>
+      
+      <div class="mb-3">
+        <label class="form-label">Улица</label>
+        <input class="form-control" name="postal_street" value="{{ entry.postal_street or '' }}" required>
+      </div>
+      
+      <div class="row">
+        <div class="col-md-4 mb-3">
+          <label class="form-label">Дом</label>
+          <input class="form-control" name="postal_building" value="{{ entry.postal_building or '' }}" required>
+        </div>
+        <div class="col-md-4 mb-3">
+          <label class="form-label">Корпус</label>
+          <input class="form-control" name="postal_corpus" value="{{ entry.postal_corpus or '' }}">
+        </div>
+        <div class="col-md-4 mb-3">
+          <label class="form-label">Квартира</label>
+          <input class="form-control" name="postal_apartment" value="{{ entry.postal_apartment or '' }}">
+        </div>
+      </div>
+      
+      <div class="mb-3">
+        <label class="form-label">ФИ получателя</label>
+        <input class="form-control" name="postal_recipient_fullname" value="{{ entry.postal_recipient_fullname or '' }}" required>
+      </div>
+      
+      <div class="mb-3">
+        <label class="form-label">Телефон получателя</label>
+        <input class="form-control" name="postal_recipient_phone" value="{{ entry.postal_recipient_phone or '' }}" required>
+      </div>
+    </fieldset>
+
+  {% elif entry.pickup_type == 'pickup' %}
+    <!-- Pickup point fields -->
+    <fieldset class="border p-3 mb-3">
+      <legend class="w-auto">🏢 Пункт выдачи</legend>
+      
+      <div class="mb-3">
+        <label class="form-label">Компания доставки</label>
+        <input class="form-control" name="pickup_company" value="{{ entry.pickup_company or '' }}" required>
+      </div>
+      
+      <div class="mb-3">
+        <label class="form-label">Адрес пункта выдачи</label>
+        <input class="form-control" name="pickup_address" value="{{ entry.pickup_address or '' }}" required>
+      </div>
+      
+      <div class="mb-3">
+        <label class="form-label">ФИ получателя</label>
+        <input class="form-control" name="pickup_recipient_fullname" value="{{ entry.pickup_recipient_fullname or '' }}" required>
+      </div>
+      
+      <div class="mb-3">
+        <label class="form-label">Телефон получателя</label>
+        <input class="form-control" name="pickup_recipient_phone" value="{{ entry.pickup_recipient_phone or '' }}" required>
+      </div>
+      
+        <div class="mb-3">
+          <label for="pickup_index">Почтовый индекс (для курьера)</label>
+          <input class="form-control" name="pickup_index" value="{{ entry.pickup_index or '' }}">
+        </div>
+      
+        <div class="mb-3">
+          <label for="pickup_point_id">Идентификатор пункта выдачи</label>
+          <input class="form-control" name="pickup_point_id" value="{{ entry.pickup_point_id or '' }}">
+        </div>
+      
+        <div class="mb-3">
+          <label for="pickup_delivery_mode">Режим доставки</label>
+          <input class="form-control" name="pickup_delivery_mode" value="{{ entry.pickup_delivery_mode or '' }}">
+        </div>
+    </fieldset>
+  {% endif %}
+
+  <div class="mb-3">
+    <label class="form-label">Телефон пользователя (опционально)</label>
+    <input class="form-control" name="phone" value="{{ user.phone or '' }}">
+  </div>
+
+  <button class="btn btn-primary" type="submit">Сохранить</button>
+  <a href="/admin/route1" class="btn btn-secondary">Отмена</a>
+</form>
+
+<hr>
+
+<form method="post" action="/admin/route1/{{ entry.id }}/delete">
+  <button class="btn btn-danger" type="submit" onclick="return confirm('Удалить запись маршрута &quot;С подарками&quot;? Это действие необратимо.')">Удалить запись</button>
+</form>
+{% endblock %}

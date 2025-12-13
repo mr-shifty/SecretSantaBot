@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Диджитал Санта (с поздравлениями) — записи</h3>
+<table class="table table-sm">
+<thead><tr><th>ID</th><th>User</th><th>Email</th><th>Статус</th><th>Действия</th></tr></thead>
+<tbody>
+{% for e in entries %}
+<tr>
+  <td>{{ e.id }}</td>
+  <td>{% if users and users.get(e.user_id) %}{{ users.get(e.user_id).telegram_username or users.get(e.user_id).telegram_id }}{% else %}{{ e.user_id }}{% endif %}</td>
+  <td>{{ e.email }}</td>
+  <!-- <td>
+    {% if e.image_path %}
+      <img src="/media/{{ e.image_path }}" style="max-width: 50px; max-height: 50px;" alt="image">
+    {% else %}
+      ❌ Нет файла
+    {% endif %}
+  </td> -->
+  <td>{{ e.status }}</td>
+  <td>
+    <a href="/admin/route2/{{ e.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
+    <form method="post" action="/admin/route2/{{ e.id }}/delete" style="display:inline; margin-left:6px;">
+      <button class="btn btn-sm btn-danger" type="submit" onclick="return confirm('Удалить запись маршрута &quot;С поздравлениями&quot;? Это действие необратимо.')">Delete</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

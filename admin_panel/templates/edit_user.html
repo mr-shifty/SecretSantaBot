@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Редактировать пользователя #{{ user.id }}</h3>
+<form method="post" action="/admin/users/{{ user.id }}/edit">
+  <div class="mb-3">
+    <label class="form-label">Телефон (опционально)</label>
+    <input class="form-control" name="phone" value="{{ user.phone or '' }}">
+  </div>
+  <button class="btn btn-primary" type="submit">Сохранить</button>
+  <a href="/admin/users" class="btn btn-secondary">Отмена</a>
+</form>
+<hr>
+<form method="post" action="/admin/users/{{ user.id }}/delete">
+  <button class="btn btn-danger" type="submit" onclick="return confirm('Удалить пользователя? Это действие необратимо.')">Удалить пользователя</button>
+</form>
+{% endblock %}
