@@ -26,13 +26,23 @@ class Route1States(StatesGroup):
     postal_building = State()
     postal_corpus = State()
     postal_apartment = State()
+    postal_address_singleline = State()
     postal_fullname = State()
     postal_phone = State()
     postal_review = State()
+    postal_last_name = State()
+    postal_first_name = State()
+    postal_patronymic = State()
+    # postal_choice removed: single field accepts address or branch number
+    postal_index = State()
+    postal_branch_number = State()
     
     # Pickup point path
     pickup_company = State()
     pickup_company_choice = State()
+    pickup_index = State()
+    pickup_point_id = State()
+    pickup_delivery_mode = State()
     pickup_address = State()
     pickup_fullname = State()
     pickup_phone = State()

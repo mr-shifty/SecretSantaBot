@@ -45,12 +45,20 @@ class Route1Entry(Base):
     postal_building = Column(String, nullable=True)
     postal_corpus = Column(String, nullable=True)
     postal_apartment = Column(String, nullable=True)
+    postal_index = Column(String, nullable=True)
+    postal_branch_number = Column(String, nullable=True)
+    postal_recipient_last_name = Column(String, nullable=True)
+    postal_recipient_first_name = Column(String, nullable=True)
+    postal_recipient_patronymic = Column(String, nullable=True)
     postal_recipient_fullname = Column(String, nullable=True)
     postal_recipient_phone = Column(String, nullable=True)
 
     # Pickup point specific fields
     pickup_company = Column(String, nullable=True)
     pickup_address = Column(String, nullable=True)
+    pickup_index = Column(String, nullable=True)
+    pickup_point_id = Column(String, nullable=True)
+    pickup_delivery_mode = Column(String, nullable=True)
     pickup_recipient_fullname = Column(String, nullable=True)
     pickup_recipient_phone = Column(String, nullable=True)
     status = Column(String, default="pending")  # pending/completed/cancelled

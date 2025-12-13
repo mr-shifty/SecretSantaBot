@@ -86,6 +86,11 @@ async def save_route1_entry(
 	postal_corpus: str | None = None,
 	postal_apartment: str | None = None,
 	postal_recipient_fullname: str | None = None,
+	postal_recipient_last_name: str | None = None,
+	postal_recipient_first_name: str | None = None,
+	postal_recipient_patronymic: str | None = None,
+	postal_index: str | None = None,
+	postal_branch_number: str | None = None,
 	postal_recipient_phone: str | None = None,
 	postal_telegram: str | None = None,
 	# Pickup fields
@@ -93,6 +98,9 @@ async def save_route1_entry(
 	pickup_address: str | None = None,
 	pickup_recipient_fullname: str | None = None,
 	pickup_recipient_phone: str | None = None,
+	pickup_index: str | None = None,
+	pickup_point_id: str | None = None,
+	pickup_delivery_mode: str | None = None,
 	# Legacy fields
 	full_address: str | None = None,
 	delivery_method: str | None = None,
@@ -118,10 +126,20 @@ async def save_route1_entry(
 			postal_building=postal_building,
 			postal_corpus=postal_corpus,
 			postal_apartment=postal_apartment,
-			postal_recipient_fullname=postal_recipient_fullname,
+			postal_recipient_fullname=postal_recipient_fullname or (
+				f"{postal_recipient_last_name or ''} {postal_recipient_first_name or ''} {postal_recipient_patronymic or ''}".strip()
+			),
+			postal_recipient_last_name=postal_recipient_last_name,
+			postal_recipient_first_name=postal_recipient_first_name,
+			postal_recipient_patronymic=postal_recipient_patronymic,
+			postal_index=postal_index,
+			postal_branch_number=postal_branch_number,
 			postal_recipient_phone=postal_recipient_phone,
 			pickup_company=pickup_company,
 			pickup_address=pickup_address,
+			pickup_index=pickup_index,
+			pickup_point_id=pickup_point_id,
+			pickup_delivery_mode=pickup_delivery_mode,
 			pickup_recipient_fullname=pickup_recipient_fullname,
 			pickup_recipient_phone=pickup_recipient_phone,
 			# Keep legacy fields for backward compatibility
@@ -150,7 +168,6 @@ async def save_route2_entry(
 	notify_date: datetime | None = None,
 ):
 	# Resolve user identifier to internal User.id
-	resolved_user_id = await _resolve_internal_user_id(user_id)
 	if resolved_user_id is None:
 		logger.warning(f"save_route2_entry: unable to resolve user {user_id} to internal id; storing as-is")
 		resolved_user_id = user_id

@@ -9,12 +9,20 @@ from bot.db.database import get_session
 from bot.db.models import Route1Entry
 from bot.logger import get_logger
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from bot.keyboards import reply_menu
+from bot.keyboards import reply_menu, delivery_method_keyboard
 from bot.utils import is_admin
 from aiogram.types import CallbackQuery
 
 logger = get_logger("route1")
 router = Router()
+
+# Notes: data required for different delivery options
+# - Почта России: recipient full name (ФИО), postal index, full address (city, street, house, apt), recipient phone.
+# - СДЭК (CDEK): typically requires recipient full name, phone, postal index and full address for courier delivery; for pickup-point delivery you usually need the pickup point ID (or address) and recipient contact phone. For door delivery, keep index + full address.
+# - Яндекс GO: similar requirements to CDEK (name, phone, address/index for door; pickup point ID/address for pickup-point delivery).
+# Implementation note: we collect the following fields for third-party couriers and pickup points:
+# `pickup_company`, `pickup_index`, `pickup_address`, `pickup_fullname`, `pickup_phone`.
+# For DB compatibility we save index into `postal_index` so notifications can display it uniformly.
 
 @router.message(Command("route1"))
 async def cmd_route1(message: Message, state: FSMContext):
@@ -134,11 +142,8 @@ async def process_phone(message: Message, state: FSMContext):
 	
 	# Ask about pickup method
 	await message.answer(
-		"📦 Выберите способ получения подарка:\n\n"
-		"1️⃣ <b>Почта России</b> - отправка по почтовому адресу\n"
-		"2️⃣ <b>Пункт выдачи</b> - самовывоз (СДЭК, Яндекс.Карго и т.д.)\n\n"
-		"Напишите <b>1</b> или <b>2</b>:",
-		parse_mode="HTML"
+		"📦 Выберите способ получения подарка:",
+		reply_markup=delivery_method_keyboard(),
 	)
 	await state.set_state(Route1States.pickup_method)
 
@@ -148,9 +153,9 @@ async def process_pickup_method(message: Message, state: FSMContext):
 	if choice == "1":
 		pickup_type = "postal"
 		logger.debug(f"User {message.from_user.id} chose postal delivery")
-		await message.answer("📮 Вы выбрали доставку Почтой России.\n\nУкажите город:")
+		await message.answer("📮 Вы выбрали доставку Почтой России.\n\nПожалуйста, введите фамилию получателя (обязательно для получения):")
 		await state.update_data(pickup_type=pickup_type)
-		await state.set_state(Route1States.postal_city)
+		await state.set_state(Route1States.postal_last_name)
 	elif choice == "2":
 		pickup_type = "pickup"
 		logger.debug(f"User {message.from_user.id} chose pickup point")
@@ -167,7 +172,105 @@ async def process_pickup_method(message: Message, state: FSMContext):
 		await message.answer("❌ Пожалуйста, напишите 1 или 2")
 		return
 
+
+@router.callback_query(lambda c: c.data and c.data.startswith('delivery:'))
+async def cb_delivery_method(callback: CallbackQuery, state: FSMContext):
+	await callback.answer()
+	val = callback.data.split(':', 1)[1]
+	if val == 'postal':
+		pickup_type = 'postal'
+		await state.update_data(pickup_type=pickup_type)
+		await callback.message.answer('📮 Вы выбрали доставку Почтой России.\n\nПожалуйста, введите фамилию получателя (обязательно для получения):')
+		await state.set_state(Route1States.postal_last_name)
+		return
+	# For third-party delivery companies we will treat them as pickup (self-delivery or courier options)
+	if val in ('cdek', 'yandex_go'):
+		pickup_type = 'pickup'
+		company = 'СДЭК' if val == 'cdek' else 'Яндекс GO'
+		await state.update_data(pickup_type=pickup_type, pickup_company=company)
+		# Ask whether it's delivery to door or pickup point
+		from bot.keyboards import pickup_mode_keyboard
+		await callback.message.answer('Выберите способ получения: доставка до двери или самовывоз в пункте выдачи:', reply_markup=pickup_mode_keyboard())
+		await state.set_state(Route1States.pickup_delivery_mode)
+		return
+	# Unknown value -> fallback
+	await callback.message.answer('❌ Неизвестный способ доставки. Попробуйте снова.')
+	return
+
 # ===== POSTAL DELIVERY PATH =====
+@router.message(Route1States.postal_last_name)
+async def process_postal_last_name(message: Message, state: FSMContext):
+	last_name = message.text.strip()
+	if not last_name:
+		await message.answer("❌ Фамилия не может быть пустой. Укажите фамилию:")
+		return
+	await state.update_data(postal_recipient_last_name=last_name)
+	await message.answer("Укажите имя:")
+	await state.set_state(Route1States.postal_first_name)
+
+
+@router.message(Route1States.postal_first_name)
+async def process_postal_first_name(message: Message, state: FSMContext):
+	first_name = message.text.strip()
+	if not first_name:
+		await message.answer("❌ Имя не может быть пустым. Укажите имя:")
+		return
+	await state.update_data(postal_recipient_first_name=first_name)
+	await message.answer("Укажите отчество (обязательно для получения):")
+	await state.set_state(Route1States.postal_patronymic)
+
+
+@router.message(Route1States.postal_patronymic)
+async def process_postal_patronymic(message: Message, state: FSMContext):
+	patronymic = message.text.strip()
+	if not patronymic:
+		await message.answer("❌ Отчество не может быть пустым. Укажите отчество:")
+		return
+	await state.update_data(postal_recipient_patronymic=patronymic)
+	# Ask for postal index next (we'll ask for address or branch in one field 
+	await message.answer("Введите почтовый индекс:")
+	await state.set_state(Route1States.postal_index)
+
+# postal_choice callback removed — we use a single field for address or branch
+
+
+@router.message(Route1States.postal_index)
+async def process_postal_index(message: Message, state: FSMContext):
+	index = message.text.strip()
+	if not index:
+		await message.answer('❌ Индекс обязателен. Укажите почтовый индекс:')
+		return
+	await state.update_data(postal_index=index)
+	# Ask for either a full address OR a branch number in one field
+	await message.answer('Введите точный адрес в одну строку (Город, улица, дом, кв/офис) или укажите номер отделения')
+	await state.set_state(Route1States.postal_address_singleline)
+
+
+@router.message(Route1States.pickup_index)
+async def process_pickup_index(message: Message, state: FSMContext):
+	index = message.text.strip()
+	if not index:
+		await message.answer('❌ Индекс обязателен. Укажите почтовый индекс:')
+		return
+	# Basic validation: allow digits and spaces, remove spaces
+	import re
+	if not re.match(r'^[0-9\s]{4,6}$', index):
+		await message.answer('❌ Неверный формат индекса. Укажите цифры индекса (обычно 5 цифр):')
+		return
+	index_clean = re.sub(r'\s+', '', index)
+	await state.update_data(pickup_index=index_clean)
+	# Continue depending on pickup delivery mode: if door -> ask address; if pickup point -> ask point id
+	data = await state.get_data()
+	if data.get('pickup_delivery_mode') == 'point':
+		await message.answer('Введите идентификатор или адрес пункта выдачи:')
+		await state.set_state(Route1States.pickup_point_id)
+		return
+	# default/door mode -> ask for address without index
+	await message.answer('Укажите адрес доставки (без индекса):')
+	await state.set_state(Route1States.pickup_address)
+
+# old branch-number-only handler removed; we now use single-line address/branch input in `postal_address_singleline`
+
 @router.message(Route1States.postal_city)
 async def process_postal_city(message: Message, state: FSMContext):
 	city = message.text.strip()
@@ -213,8 +316,55 @@ async def process_postal_apartment(message: Message, state: FSMContext):
 	if apartment in ("-", ""):
 		apartment = None
 	await state.update_data(postal_apartment=apartment)
-	await message.answer("Ваше полное имя (ФИ или как вас зовут):")
-	await state.set_state(Route1States.postal_fullname)
+	# We already collected recipient name in previous steps; proceed to phone
+	kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Оставить свой номер")]], resize_keyboard=True, one_time_keyboard=True)
+	await message.answer("Телефон получателя (для курьера/почты). Напишите номер или нажмите 'Оставить свой номер':", reply_markup=kb)
+	await state.set_state(Route1States.postal_phone)
+
+
+@router.message(Route1States.postal_address_singleline)
+async def process_postal_address_singleline(message: Message, state: FSMContext):
+	text = (message.text or '').strip()
+	if not text:
+		await message.answer('❌ Адрес не может быть пустым. Введите точный адрес в одну строку (Город, улица, дом, кв/офис) или укажите номер отделения')
+		return
+	# Store single-line address; detect if this is a branch number or a full address
+	await state.update_data(postal_address_line=text)
+	import re
+	def _looks_like_branch(s: str) -> bool:
+		if not s:
+			return False
+		t = s.strip()
+		if re.match(r'^(?:№\s*)?\d+[\d/\-\s]*$', t):
+			return True
+		tl = t.lower()
+		if tl.startswith(('отд', 'почт', 'почтомат', 'п.')) or 'отдел' in tl:
+			return True
+		return False
+	# Try to heuristically split into components for DB fields
+	parts = [p.strip() for p in text.split(',') if p.strip()]
+	# City, Street, Building, Apartment
+	if _looks_like_branch(text):
+		# Treat as branch/pochomat number
+		branch_text = text.strip()
+		await state.update_data(postal_branch_number=branch_text)
+		# Clear other postal components
+		await state.update_data(postal_city=None, postal_street=None, postal_building=None, postal_apartment=None)
+	else:
+		city = parts[0] if len(parts) > 0 else None
+		street = parts[1] if len(parts) > 1 else None
+		building = None
+		apartment = None
+		if len(parts) > 2:
+			building_part = parts[2]
+			building = building_part
+			if len(parts) > 3:
+				apartment = parts[3]
+		await state.update_data(postal_city=city, postal_street=street, postal_building=building, postal_apartment=apartment)
+	# Proceed to phone
+	kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Оставить свой номер")]], resize_keyboard=True, one_time_keyboard=True)
+	await message.answer('Телефон получателя (для курьера/почты). Напишите номер или нажмите "Оставить свой номер":', reply_markup=kb)
+	await state.set_state(Route1States.postal_phone)
 
 @router.message(Route1States.postal_fullname)
 async def process_postal_fullname(message: Message, state: FSMContext):
@@ -253,8 +403,8 @@ async def process_pickup_company(message: Message, state: FSMContext):
 		await message.answer("❌ Компания не может быть пустой. Укажите компанию доставки:")
 		return
 	await state.update_data(pickup_company=company)
-	await message.answer("Укажите адрес пункта выдачи (полный адрес с индексом):")
-	await state.set_state(Route1States.pickup_address)
+	await message.answer("Введите почтовый индекс (5 цифр) для пункта выдачи:")
+	await state.set_state(Route1States.pickup_index)
 
 
 # Handle quick-selection callbacks for pickup company
@@ -267,10 +417,29 @@ async def cb_pickup_company(callback: CallbackQuery, state: FSMContext):
 		await state.set_state(Route1States.pickup_company)
 		await callback.message.answer('Пожалуйста, напишите название компании доставки:')
 		return
-	# Save chosen company and proceed to address
+	# Save chosen company and proceed to collect postal index then address
 	await state.update_data(pickup_company=val)
-	await callback.message.answer(f'Вы выбрали компанию: {val}. Укажите адрес пункта выдачи (полный адрес с индексом):')
-	await state.set_state(Route1States.pickup_address)
+	from bot.keyboards import pickup_mode_keyboard
+	await callback.message.answer(f'Вы выбрали компанию: {val}. Выберите способ получения: доставка до двери или самовывоз в пункте выдачи:', reply_markup=pickup_mode_keyboard())
+	await state.set_state(Route1States.pickup_delivery_mode)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith('pickupmode:'))
+async def cb_pickup_mode(callback: CallbackQuery, state: FSMContext):
+	await callback.answer()
+	val = callback.data.split(':', 1)[1]
+	# val: 'door' or 'point'
+	await state.update_data(pickup_delivery_mode=val)
+	if val == 'door':
+		# ask for index and then address
+		await callback.message.answer('Введите почтовый индекс (5 цифр) для доставки:')
+		await state.set_state(Route1States.pickup_index)
+		return
+	else:
+		# pickup point flow — ask for pickup point identifier (ID or address)
+		await callback.message.answer('Введите идентификатор или адрес пункта выдачи:')
+		await state.set_state(Route1States.pickup_point_id)
+		return
 
 @router.message(Route1States.pickup_address)
 async def process_pickup_address(message: Message, state: FSMContext):
@@ -280,6 +449,18 @@ async def process_pickup_address(message: Message, state: FSMContext):
 		return
 	await state.update_data(pickup_address=address)
 	await message.answer("Ваше полное имя для получения посылки:")
+	await state.set_state(Route1States.pickup_fullname)
+
+
+@router.message(Route1States.pickup_point_id)
+async def process_pickup_point_id(message: Message, state: FSMContext):
+	val = message.text.strip()
+	if not val:
+		await message.answer('❌ Идентификатор пункта выдачи не может быть пустым. Укажите идентификатор или адрес пункта выдачи:')
+		return
+	await state.update_data(pickup_point_id=val)
+	# collect recipient name and phone as usual
+	await message.answer('Укажите полное имя получателя для выдачи в пункте:')
 	await state.set_state(Route1States.pickup_fullname)
 
 @router.message(Route1States.pickup_fullname)
@@ -337,20 +518,56 @@ async def process_wishlist(message: Message, state: FSMContext):
 	
 	# Build full_address from pickup_type
 	if pickup_type == "postal":
-		postal_city = data.get("postal_city")
-		postal_street = data.get("postal_street")
-		postal_building = data.get("postal_building")
-		postal_corpus = data.get("postal_corpus")
-		postal_apartment = data.get("postal_apartment")
-		full_address = f"{postal_city}, {postal_street} д.{postal_building}"
-		if postal_corpus:
-			full_address += f" корп.{postal_corpus}"
-		if postal_apartment:
-			full_address += f" кв.{postal_apartment}"
+		postal_index = data.get('postal_index')
+		postal_city = data.get('postal_city')
+		postal_street = data.get('postal_street')
+		postal_building = data.get('postal_building')
+		postal_corpus = data.get('postal_corpus')
+		postal_apartment = data.get('postal_apartment')
+		postal_branch = data.get('postal_branch_number')
+		postal_address_line = data.get('postal_address_line')
+		import re
+		def _looks_like_branch(s: str) -> bool:
+			if not s:
+				return False
+			t = s.strip()
+			if re.match(r'^(?:№\s*)?\d+[\d/\-\s]*$', t):
+				return True
+			tl = t.lower()
+			if tl.startswith(('отд', 'почт', 'почтомат', 'п.')) or 'отдел' in tl:
+				return True
+			return False
+
+		if postal_address_line:
+			if _looks_like_branch(postal_address_line):
+				branch_text = postal_address_line.strip()
+				postal_branch = branch_text
+				full_address = f"Почта России, отделение/почтомат {postal_branch}"
+				if postal_city:
+					full_address += f", {postal_city}"
+				if postal_index:
+					full_address += f", индекс {postal_index}"
+			else:
+				full_address = postal_address_line
+				if postal_index:
+					full_address = f"{postal_index}, {full_address}"
+		else:
+			full_address = f"{postal_city}, {postal_street} д.{postal_building}"
+			if postal_corpus:
+				full_address += f" корп.{postal_corpus}"
+			if postal_apartment:
+				full_address += f" кв.{postal_apartment}"
+			if postal_index:
+				full_address = f"{postal_index}, " + full_address
 	elif pickup_type == "pickup":
 		pickup_company = data.get("pickup_company")
 		pickup_address = data.get("pickup_address")
-		full_address = f"{pickup_company}, {pickup_address}"
+		pickup_index = data.get('pickup_index') or data.get('postal_index')
+		# Display index separately if provided
+		if pickup_index:
+			full_address = f"{pickup_company}, индекс {pickup_index}, {pickup_address}"
+		else:
+			full_address = f"{pickup_company}, {pickup_address}"
 	else:
 		full_address = "Unknown"
 	
@@ -364,13 +581,23 @@ async def process_wishlist(message: Message, state: FSMContext):
 	}
 	
 	if pickup_type == "postal":
+		# Compose recipient fullname from provided parts if needed
+		pr_last = data.get('postal_recipient_last_name')
+		pr_first = data.get('postal_recipient_first_name')
+		pr_pat = data.get('postal_recipient_patronymic')
+		pr_fullname = data.get('postal_recipient_fullname') or ' '.join(filter(None, [pr_last, pr_first, pr_pat]))
 		entry_kwargs.update({
 			"postal_city": data.get("postal_city"),
 			"postal_street": data.get("postal_street"),
 			"postal_building": data.get("postal_building"),
 			"postal_corpus": data.get("postal_corpus"),
 			"postal_apartment": data.get("postal_apartment"),
-			"postal_recipient_fullname": data.get("postal_fullname"),
+			"postal_recipient_fullname": pr_fullname,
+			"postal_recipient_last_name": pr_last,
+			"postal_recipient_first_name": pr_first,
+			"postal_recipient_patronymic": pr_pat,
+			"postal_index": data.get('postal_index'),
+			"postal_branch_number": data.get('postal_branch_number'),
 			"postal_recipient_phone": data.get("postal_phone"),
 			"postal_telegram": message.from_user.username,
 		})
@@ -380,6 +607,9 @@ async def process_wishlist(message: Message, state: FSMContext):
 			"pickup_address": data.get("pickup_address"),
 			"pickup_recipient_fullname": data.get("pickup_fullname"),
 			"pickup_recipient_phone": data.get("pickup_phone"),
+			"pickup_index": data.get("pickup_index") or data.get('postal_index'),
+			"pickup_point_id": data.get("pickup_point_id"),
+			"pickup_delivery_mode": data.get('pickup_delivery_mode'),
 		})
 	
 	logger.info(f"User {message.from_user.id} submitting route1 entry: pickup_type={pickup_type}, email={email}")
@@ -511,15 +741,46 @@ async def survey_q8(message: Message, state: FSMContext):
 		postal_building = prev.get("postal_building")
 		postal_corpus = prev.get("postal_corpus")
 		postal_apartment = prev.get("postal_apartment")
-		full_address = f"{postal_city}, {postal_street} д.{postal_building}"
-		if postal_corpus:
-			full_address += f" корп.{postal_corpus}"
-		if postal_apartment:
-			full_address += f" кв.{postal_apartment}"
+		postal_index = prev.get('postal_index')
+		postal_address_line = prev.get('postal_address_line')
+		import re
+		def _looks_like_branch(s: str) -> bool:
+			if not s:
+				return False
+			t = s.strip()
+			if re.match(r'^(?:№\s*)?\d+[\d/\-\s]*$', t):
+				return True
+			tl = t.lower()
+			if tl.startswith(('отд', 'почт', 'почтомат', 'п.')) or 'отдел' in tl:
+				return True
+			return False
+
+		if postal_address_line:
+			if _looks_like_branch(postal_address_line):
+				branch_text = postal_address_line.strip()
+				full_address = f"Почта России, отделение/почтомат {branch_text}"
+				if postal_city:
+					full_address += f", {postal_city}"
+				if postal_index:
+					full_address += f", индекс {postal_index}"
+			else:
+				full_address = postal_address_line
+				if postal_index:
+					full_address = f"{postal_index}, {full_address}"
+		else:
+			full_address = f"{postal_city}, {postal_street} д.{postal_building}"
+			if postal_corpus:
+				full_address += f" корп.{postal_corpus}"
+			if postal_apartment:
+				full_address += f" кв.{postal_apartment}"
 	elif pickup_type == "pickup":
 		pickup_company = prev.get("pickup_company")
 		pickup_address = prev.get("pickup_address")
-		full_address = f"{pickup_company}, {pickup_address}"
+		pickup_index = prev.get('pickup_index') or prev.get('postal_index')
+		if pickup_index:
+			full_address = f"{pickup_company}, индекс {pickup_index}, {pickup_address}"
+		else:
+			full_address = f"{pickup_company}, {pickup_address}"
 	else:
 		full_address = "Анкета"
 
@@ -548,6 +809,9 @@ async def survey_q8(message: Message, state: FSMContext):
 			"pickup_address": prev.get("pickup_address"),
 			"pickup_recipient_fullname": prev.get("pickup_fullname"),
 			"pickup_recipient_phone": prev.get("pickup_phone"),
+			"pickup_index": prev.get('pickup_index') or prev.get('postal_index'),
+			"pickup_point_id": prev.get('pickup_point_id'),
+			"pickup_delivery_mode": prev.get('pickup_delivery_mode'),
 		})
 
 	await save_route1_entry(message.from_user.id, survey=survey_dict, **entry_kwargs)
