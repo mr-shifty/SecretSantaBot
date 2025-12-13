@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: secret_santa_bot
+    env_file:
+      - .env.production
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data.db}
@@ -27,6 +29,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: secret_santa_admin
+    env_file:
+      - .env.production
     environment:
       - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data.db}
       - BOT_INTERNAL_URL=${BOT_INTERNAL_URL:-http://bot:9000/internal/trigger_reminders}
